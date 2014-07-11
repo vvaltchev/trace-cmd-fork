@@ -32,6 +32,7 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <linux/types.h>
 
@@ -162,7 +163,7 @@ struct tracecmd_msg_error {
 		struct tracecmd_msg_tinit tinit;
 		struct tracecmd_msg_rinit rinit;
 		struct tracecmd_msg_data data;
-	} data;
+	};
 } __attribute__((packed));
 
 struct tracecmd_msg {
@@ -291,6 +292,29 @@ static void tracecmd_msg_init(u32 cmd, struct tracecmd_msg *msg)
 		msg->hdr.size = htonl(msg_min_sizes[cmd]);
 }
 
+static int make_error_msg(struct tracecmd_msg *msg, struct tracecmd_msg *errmsg)
+{
+	msg->err.hdr.size = errmsg->hdr.size;
+	msg->err.hdr.cmd = errmsg->hdr.cmd;
+
+	switch (ntohl(errmsg->hdr.cmd)) {
+	case MSG_TINIT:
+		msg->err.tinit = errmsg->tinit;
+		break;
+	case MSG_RINIT:
+		msg->err.rinit = errmsg->rinit;
+		break;
+	case MSG_SENDMETA:
+	case MSG_RCONNECT:
+		msg->err.data = errmsg->data;
+		break;
+	}
+
+	msg->hdr.size = htonl(sizeof(*msg));
+
+	return 0;
+}
+
 static void msg_free(struct tracecmd_msg *msg)
 {
 	int cmd = ntohl(msg->hdr.cmd);
@@ -313,6 +337,15 @@ static int tracecmd_msg_send(int fd, struct tracecmd_msg *msg)
 	msg_free(msg);
 
 	return ret;
+}
+
+static void tracecmd_msg_send_error(int fd, struct tracecmd_msg *errmsg)
+{
+	struct tracecmd_msg msg;
+
+	tracecmd_msg_init(MSG_ERROR, &msg);
+	make_error_msg(&msg, errmsg);
+	tracecmd_msg_send(fd, &msg);
 }
 
 static int msg_read(int fd, void *buf, u32 size, int *n)
@@ -462,17 +495,19 @@ static int tracecmd_msg_wait_for_msg(int fd, struct tracecmd_msg *msg)
 	return 0;
 }
 
-int tracecmd_msg_send_init_data(struct tracecmd_msg_handle *msg_handle,
-				int **client_ports)
+static int tracecmd_msg_send_init_data(struct tracecmd_msg_handle *msg_handle,
+				       bool net, int **array)
 {
 	struct tracecmd_msg send_msg;
 	struct tracecmd_msg recv_msg;
 	int fd = msg_handle->fd;
+	char path[PATH_MAX];
 	int *ports;
+	int *sfds;
 	int i, cpus;
 	int ret;
 
-	*client_ports = NULL;
+	*array = NULL;
 
 	tracecmd_msg_init(MSG_TINIT, &send_msg);
 	ret = make_tinit(msg_handle, &send_msg);
@@ -491,13 +526,62 @@ int tracecmd_msg_send_init_data(struct tracecmd_msg_handle *msg_handle,
 		return -EINVAL;
 
 	cpus = ntohl(recv_msg.rinit.cpus);
-	ports = malloc_or_die(sizeof(int) * cpus);
-	for (i = 0; i < cpus; i++)
-		ports[i] = ntohl(recv_msg.port_array[i]);
 
-	*client_ports = ports;
+	if (net) {
+		ports = malloc_or_die(sizeof(int) * cpus);
+		for (i = 0; i < cpus; i++)
+			ports[i] = ntohl(recv_msg.port_array[i]);
+		*array = ports;
+	} else {
+		sfds = malloc_or_die(sizeof(int) * cpus);
+		/* Open data paths of virtio-serial */
+		for (i = 0; i < cpus; i++) {
+			snprintf(path, PATH_MAX, TRACE_PATH_CPU, i);
+			sfds[i] = open(path, O_WRONLY);
+			if (sfds[i] < 0) {
+				warning("Cannot open %s", TRACE_PATH_CPU, i);
+				return -errno;
+			}
+		}
+		*array = sfds;
+	}
 
 	return 0;
+}
+
+int tracecmd_msg_send_init_data_net(struct tracecmd_msg_handle *msg_handle,
+				    int **ports)
+{
+	return tracecmd_msg_send_init_data(msg_handle, true, ports);
+}
+
+int tracecmd_msg_send_init_data_virt(struct tracecmd_msg_handle *msg_handle,
+				     int **sfds)
+{
+	return tracecmd_msg_send_init_data(msg_handle, false, sfds);
+}
+
+int tracecmd_msg_connect_to_server(int fd)
+{
+	struct tracecmd_msg send_msg, recv_msg;
+	int ret;
+
+	/* connect to a server */
+	tracecmd_msg_init(MSG_TCONNECT, &send_msg);
+	ret = tracecmd_msg_send(fd, &send_msg);
+	if (ret < 0)
+		return ret;
+
+	ret = tracecmd_msg_recv_wait(fd, &recv_msg);
+	if (ret < 0) {
+		if (ret == -EPROTONOSUPPORT)
+			goto error;
+	}
+
+	return ret;
+error:
+	tracecmd_msg_send_error(fd, &recv_msg);
+	return ret;
 }
 
 static bool process_option(struct tracecmd_msg_handle *msg_handle,

@@ -88,12 +88,16 @@ static int clear_function_filters;
 
 static char *host;
 static int *client_ports;
+static int *virt_sfds;
 static int sfd;
 
 /* Max size to let a per cpu file get */
 static int max_kb;
 
 static bool use_tcp;
+
+struct tracecmd_output *virt_handle;
+static bool virt;
 
 static int do_ptrace;
 
@@ -2658,6 +2662,9 @@ static int create_recorder(struct buffer_instance *instance, int cpu,
 							      path);
 		if (instance->name)
 			tracecmd_put_tracing_file(path);
+	} else if (virt_sfds) {
+		recorder = tracecmd_create_recorder_fd(virt_sfds[cpu], cpu,
+						       recorder_flags);
 	} else {
 		file = get_temp_file(instance, cpu);
 		recorder = create_recorder_instance(instance, file, cpu, brass);
@@ -2695,7 +2702,7 @@ static void check_first_msg_from_server(struct tracecmd_msg_handle *msg_handle)
 		die("server not tracecmd server");
 }
 
-static void communicate_with_listener_v1(struct tracecmd_msg_handle *msg_handle)
+static void communicate_with_listener_v1_net(struct tracecmd_msg_handle *msg_handle)
 {
 	char buf[BUFSIZ];
 	ssize_t n;
@@ -2761,9 +2768,9 @@ static void communicate_with_listener_v1(struct tracecmd_msg_handle *msg_handle)
 	}
 }
 
-static void communicate_with_listener_v2(struct tracecmd_msg_handle *msg_handle)
+static void communicate_with_listener_v2_net(struct tracecmd_msg_handle *msg_handle)
 {
-	if (tracecmd_msg_send_init_data(msg_handle, &client_ports) < 0)
+	if (tracecmd_msg_send_init_data_net(msg_handle, &client_ports) < 0)
 		die("Cannot communicate with server");
 }
 
@@ -2810,6 +2817,27 @@ static void check_protocol_version(struct tracecmd_msg_handle *msg_handle)
 			die("Cannot handle the protocol %s", buf);
 		}
 	}
+}
+
+static struct tracecmd_msg_handle *communicate_with_listener_virt(int fd)
+{
+
+	struct tracecmd_msg_handle *msg_handle;
+
+	if (tracecmd_msg_connect_to_server(fd) < 0)
+		die("Cannot communicate with server");
+
+	msg_handle = tracecmd_msg_handle_alloc(fd, TRACECMD_MSG_FL_CLIENT);
+	if (!msg_handle)
+		die("Failed to allocate message handle");
+
+	msg_handle->cpu_count = local_cpu_count;
+	msg_handle->version = V2_PROTOCOL;
+
+	if (tracecmd_msg_send_init_data_virt(msg_handle, &virt_sfds) < 0)
+		die("Cannot send init data");
+
+	return msg_handle;
 }
 
 static struct tracecmd_msg_handle *setup_network(void)
@@ -2882,11 +2910,11 @@ again:
 			close(sfd);
 			goto again;
 		}
-		communicate_with_listener_v2(msg_handle);
+		communicate_with_listener_v2_net(msg_handle);
 	}
 
 	if (msg_handle->version == V1_PROTOCOL)
-		communicate_with_listener_v1(msg_handle);
+		communicate_with_listener_v1_net(msg_handle);
 
 	return msg_handle;
 }
@@ -2913,6 +2941,24 @@ setup_connection(struct buffer_instance *instance)
 	return msg_handle;
 }
 
+static struct tracecmd_msg_handle *setup_virtio(void)
+{
+	struct tracecmd_msg_handle *msg_handle;
+	int fd;
+
+	fd = open(AGENT_CTL_PATH, O_RDWR);
+	if (fd < 0)
+		die("Cannot open %s", AGENT_CTL_PATH);
+
+	msg_handle = communicate_with_listener_virt(fd);
+
+	/* Now create the handle through this socket */
+	virt_handle = tracecmd_create_init_fd_msg(msg_handle, listed_events);
+	tracecmd_msg_finish_sending_metadata(msg_handle);
+
+	return msg_handle;
+}
+
 static void finish_network(struct tracecmd_msg_handle *msg_handle)
 {
 	if (msg_handle->version == V2_PROTOCOL)
@@ -2921,7 +2967,14 @@ static void finish_network(struct tracecmd_msg_handle *msg_handle)
 	free(host);
 }
 
-void start_threads(enum trace_type type, int global)
+static void finish_virt(struct tracecmd_msg_handle *msg_handle)
+{
+	tracecmd_msg_send_close_msg(msg_handle);
+	free(virt_handle);
+	free(virt_sfds);
+}
+
+static void start_threads(enum trace_type type, int global)
 {
 	struct buffer_instance *instance;
 	int *brass = NULL;
@@ -2946,6 +2999,10 @@ void start_threads(enum trace_type type, int global)
 			instance->msg_handle = setup_connection(instance);
 			if (!instance->msg_handle)
 				die("Failed to make connection");
+		} else if (virt) {
+			instance->msg_handle = setup_virtio();
+			if (!instance->msg_handle)
+				die("Failed to make virt connection");
 		}
 
 		for (x = 0; x < instance->cpu_count; x++) {
@@ -3108,9 +3165,12 @@ static void record_data(char *date2ts, int flags)
 	int i;
 
 	for_all_instances(instance) {
-		if (instance->msg_handle)
-			finish_network(instance->msg_handle);
-		else
+		if (instance->msg_handle) {
+			if (host)
+				finish_network(instance->msg_handle);
+			else if (virt)
+				finish_virt(instance->msg_handle);
+		} else
 			local = true;
 	}
 
@@ -4298,7 +4358,7 @@ void update_first_instance(struct buffer_instance *instance, int topt)
 }
 
 enum {
-
+	OPT_virt		= 245,
 	OPT_quiet		= 246,
 	OPT_debug		= 247,
 	OPT_max_graph_depth	= 248,
@@ -4547,6 +4607,7 @@ static void parse_record_options(int argc,
 			{"by-comm", no_argument, NULL, OPT_bycomm},
 			{"ts-offset", required_argument, NULL, OPT_tsoffset},
 			{"max-graph-depth", required_argument, NULL, OPT_max_graph_depth},
+			{"virt", no_argument, NULL, OPT_virt},
 			{"debug", no_argument, NULL, OPT_debug},
 			{"quiet", no_argument, NULL, OPT_quiet},
 			{"help", no_argument, NULL, '?'},
@@ -4685,6 +4746,8 @@ static void parse_record_options(int argc,
 		case 'o':
 			if (host)
 				die("-o incompatible with -N");
+			if (virt)
+				die("-o incompatible with --virt");
 			if (IS_START(ctx))
 				die("start does not take output\n"
 				    "Did you mean 'record'?");
@@ -4744,6 +4807,8 @@ static void parse_record_options(int argc,
 		case 'N':
 			if (!IS_RECORD(ctx))
 				die("-N only available with record");
+			if (virt)
+				die("-N incompatible with --virt");
 			if (ctx->output)
 				die("-N incompatible with -o");
 			host = optarg;
@@ -4759,6 +4824,8 @@ static void parse_record_options(int argc,
 			ctx->instance->cpumask = alloc_mask_from_hex(ctx->instance, optarg);
 			break;
 		case 't':
+			if (virt)
+				die("-t incompatible with --virt");
 			if (IS_EXTRACT(ctx))
 				ctx->topt = 1; /* Extract top instance also */
 			else
@@ -4820,6 +4887,17 @@ static void parse_record_options(int argc,
 			ctx->max_graph_depth = strdup(optarg);
 			if (!ctx->max_graph_depth)
 				die("Could not allocate option");
+			break;
+		case OPT_virt:
+			if (!IS_RECORD(ctx))
+				die("--virt only available with record");
+			if (host)
+				die("--virt incompatible with -N");
+			if (ctx->output)
+				die("--virt incompatible with -o");
+			if (use_tcp)
+				die("--virt incompatible with -t");
+			virt = true;
 			break;
 		case OPT_debug:
 			debug = 1;

@@ -2,6 +2,9 @@
 #define _TRACE_MSG_H_
 
 #include <stdbool.h>
+#define VIRTIO_PORTS	"/dev/virtio-ports/"
+#define AGENT_CTL_PATH	VIRTIO_PORTS "agent-ctl-path"
+#define TRACE_PATH_CPU	VIRTIO_PORTS "trace-path-cpu%d"
 
 #define UDP_MAX_PACKET	(65536 - 20)
 #define V2_MAGIC	"677768\0"

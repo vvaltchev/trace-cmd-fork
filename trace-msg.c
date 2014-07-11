@@ -75,6 +75,14 @@ static inline void dprint(const char *fmt, ...)
 #define MIN_META_SIZE	(sizeof(struct tracecmd_msg_header) + \
 			 sizeof(struct tracecmd_msg_meta))
 
+#define MIN_RCONNECT_SIZE	(sizeof(struct tracecmd_msg_header) + \
+				 sizeof(struct tracecmd_msg_rconnect))
+
+/* use CONNECTION_MSG as a protocol version of trace-msg */
+#define MSG_VERSION		"V2"
+#define CONNECTION_MSG		"tracecmd-" MSG_VERSION
+#define CONNECTION_MSGSIZE	sizeof(CONNECTION_MSG)
+
 unsigned int page_size;
 
 struct tracecmd_msg_server {
@@ -91,6 +99,10 @@ make_server(struct tracecmd_msg_handle *msg_handle)
 	}
 	return (struct tracecmd_msg_server *)msg_handle;
 }
+
+struct tracecmd_msg_rconnect {
+	be32 size;
+} __attribute__((packed));
 
 struct tracecmd_msg_opt {
 	be32 size;
@@ -118,10 +130,10 @@ struct tracecmd_msg_header {
 } __attribute__((packed));
 
 #define MSG_MAP						\
-	C(UNUSED_0,	0,	-1),			\
+	C(ERROR,	0,	0),			\
 	C(CLOSE,	1,	0),			\
-	C(USUSED_2,	2,	-1),			\
-	C(UNUSED_3,	3,	-1),			\
+	C(TCONNECT,	2,	0),			\
+	C(RCONNECT,	3,	0),			\
 	C(TINIT,	4,	MIN_TINIT_SIZE),	\
 	C(RINIT,	5,	MIN_RINIT_SIZE),	\
 	C(SENDMETA,	6,	MIN_META_SIZE),		\
@@ -151,12 +163,23 @@ static const char *cmd_to_name(int cmd)
 	return "Unkown";
 }
 
+struct tracecmd_msg_error {
+	struct tracecmd_msg_header	hdr;
+	union {
+		struct tracecmd_msg_tinit tinit;
+		struct tracecmd_msg_rinit rinit;
+		struct tracecmd_msg_meta meta;
+	} data;
+} __attribute__((packed));
+
 struct tracecmd_msg {
 	struct tracecmd_msg_header		hdr;
 	union {
+		struct tracecmd_msg_rconnect	rconnect;
 		struct tracecmd_msg_tinit	tinit;
 		struct tracecmd_msg_rinit	rinit;
 		struct tracecmd_msg_meta	meta;
+		struct tracecmd_msg_error	err;
 	};
 	union {
 		struct tracecmd_msg_opt		*opt;
@@ -188,6 +211,19 @@ static int msg_write(int fd, struct tracecmd_msg *msg)
 	if (ntohl(msg->hdr.size) <= size)
 		return 0;
 	return __do_write_check(fd, msg->buf, ntohl(msg->hdr.size) - size);
+}
+
+static int make_rconnect(const char *buf, int buflen, struct tracecmd_msg *msg)
+{
+	msg->rconnect.size = htonl(buflen);
+	msg->buf = malloc(buflen);
+	if (!msg->buf)
+		return -ENOMEM;
+	memcpy(msg->buf, buf, buflen);
+
+	msg->hdr.size = htonl(MIN_RCONNECT_SIZE + buflen);
+
+	return 0;
 }
 
 enum msg_opt_command {
@@ -231,19 +267,21 @@ static int make_rinit(struct tracecmd_msg *msg, int total_cpus, int *ports)
 
 	msg->rinit.cpus = htonl(total_cpus);
 
-	msg->port_array = malloc(sizeof(*ports) * total_cpus);
-	if (!msg->port_array)
-		return -ENOMEM;
+	if (ports) {
+		msg->port_array = malloc(sizeof(*ports) * total_cpus);
+		if (!msg->port_array)
+			return -ENOMEM;
 
-	size += sizeof(*ports) * total_cpus;
+		size += sizeof(*ports) * total_cpus;
 
-	ptr = msg->port_array;
+		ptr = msg->port_array;
 
-	for (i = 0; i < total_cpus; i++) {
-		/* + rrqports->cpus or rrqports->port_array[i] */
-		port = htonl(ports[i]);
-		*ptr = port;
-		ptr++;
+		for (i = 0; i < total_cpus; i++) {
+			/* + rrqports->cpus or rrqports->port_array[i] */
+			port = htonl(ports[i]);
+			*ptr = port;
+			ptr++;
+		}
 	}
 
 	msg->hdr.size = htonl(size);
@@ -416,8 +454,18 @@ static int tracecmd_msg_wait_for_msg(int fd, struct tracecmd_msg *msg)
 	}
 
 	cmd = ntohl(msg->hdr.cmd);
-	if (cmd == MSG_CLOSE)
+	switch (cmd) {
+	case MSG_RCONNECT:
+		/* Make sure the server is the tracecmd server */
+		if (memcmp(msg->buf, CONNECTION_MSG,
+			   ntohl(msg->rconnect.size) - 1) != 0) {
+			warning("server not tracecmd server");
+			return -EPROTONOSUPPORT;
+		}
+		break;
+	case MSG_CLOSE:
 		return -ECONNABORTED;
+	}
 
 	return 0;
 }
@@ -477,7 +525,11 @@ static void error_operation_for_server(struct tracecmd_msg *msg)
 
 	cmd = ntohl(msg->hdr.cmd);
 
-	warning("Message: cmd=%d size=%d\n", cmd, ntohl(msg->hdr.size));
+	if (cmd == MSG_ERROR)
+		plog("Receive error message: cmd=%d size=%d\n",
+		     ntohl(msg->err.hdr.cmd), ntohl(msg->err.hdr.size));
+	else
+		warning("Message: cmd=%d size=%d\n", cmd, ntohl(msg->hdr.size));
 }
 
 struct tracecmd_msg_handle *
@@ -504,6 +556,53 @@ void tracecmd_msg_handle_close(struct tracecmd_msg_handle *msg_handle)
 {
 	close(msg_handle->fd);
 	free(msg_handle);
+}
+
+int tracecmd_msg_set_connection(int fd, const char *domain)
+{
+	struct tracecmd_msg msg;
+	u32 cmd;
+	int ret;
+
+	memset(&msg, 0, sizeof(msg));
+
+	/*
+	 * Wait for connection msg by a client first.
+	 * If a client uses virtio-serial, a connection message will
+	 * not be sent immediately after accept(). connect() is called
+	 * in QEMU, so the client can send the connection message
+	 * after guest boots. Therefore, the virt-server patiently
+	 * waits for the connection request of a client.
+	 */
+	ret = tracecmd_msg_recv(fd, &msg);
+	if (ret < 0) {
+		if (!msg.hdr.cmd) {
+			/* No data means QEMU has already died. */
+			close(fd);
+			die("Connection refuesd: %s", domain);
+		}
+		return -ENOMSG;
+	}
+
+	cmd = ntohl(msg.hdr.cmd);
+	if (cmd == MSG_CLOSE)
+		return -ECONNABORTED;
+	else if (cmd != MSG_TCONNECT)
+		return -EINVAL;
+
+	ret = make_rconnect(CONNECTION_MSG, CONNECTION_MSGSIZE, &msg);
+	if (ret < 0)
+		goto error;
+
+	ret = tracecmd_msg_send(fd, &msg);
+	if (ret < 0)
+		goto error;
+
+	return 0;
+
+error:
+	error_operation_for_server(&msg);
+	return ret;
 }
 
 #define MAX_OPTION_SIZE 4096

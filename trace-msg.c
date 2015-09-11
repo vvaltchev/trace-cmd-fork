@@ -131,7 +131,8 @@ struct tracecmd_msg_header {
 	C(TINIT,	4,	MIN_TINIT_SIZE),	\
 	C(RINIT,	5,	MIN_RINIT_SIZE),	\
 	C(SENDMETA,	6,	MIN_DATA_SIZE),		\
-	C(FINMETA,	7,	0),
+	C(FINMETA,	7,	0),			\
+	C(MAX,		8,	-1)
 
 #undef C
 #define C(a,b,c)	MSG_##a = b
@@ -152,7 +153,7 @@ static const char *msg_names[] = { MSG_MAP };
 
 static const char *cmd_to_name(int cmd)
 {
-	if (cmd <= MSG_FINMETA)
+	if (cmd < MSG_MAX)
 		return msg_names[cmd];
 	return "Unkown";
 }
@@ -189,8 +190,10 @@ static int msg_write(int fd, struct tracecmd_msg *msg)
 	int size;
 	int ret;
 
-	if (cmd > MSG_FINMETA)
+	if (cmd >= MSG_MAX) {
+		plog("Unsupported command: %d\n", cmd);
 		return -EINVAL;
+	}
 
 	dprint("msg send: %d (%s)\n", cmd, cmd_to_name(cmd));
 
@@ -320,7 +323,7 @@ static void msg_free(struct tracecmd_msg *msg)
 	int cmd = ntohl(msg->hdr.cmd);
 
 	/* If a min size is defined, then the buf needs to be freed */
-	if (cmd < MSG_FINMETA && (msg_min_sizes[cmd] > 0))
+	if (cmd < MSG_MAX && (msg_min_sizes[cmd] > 0))
 		free(msg->buf);
 
 	memset(msg, 0, sizeof(*msg));
@@ -375,7 +378,7 @@ static int msg_read_extra(int fd, struct tracecmd_msg *msg,
 	int ret;
 
 	cmd = ntohl(msg->hdr.cmd);
-	if (cmd > MSG_FINMETA)
+	if (cmd > MSG_MAX)
 		return -EINVAL;
 
 	rsize = msg_min_sizes[cmd] - *n;

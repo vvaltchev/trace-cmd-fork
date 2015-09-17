@@ -1283,15 +1283,20 @@ static void do_listen_net(char *port)
 
 #define for_each_domain(i) for (i = dom_dir_list; i; i = (i)->next)
 
-static void make_dir_virt(const char *path, mode_t perms, const char *gr_name)
+static void make_dir(const char *path, mode_t perms)
 {
-	struct group *group;
-
 	if (mkdir(path, perms) < 0) {
 		if (errno != EEXIST)
 			pdie("mkdir %s", path);
 	}
 	chmod(path, perms);
+}
+
+static void make_dir_group(const char *path, mode_t perms, const char *gr_name)
+{
+	struct group *group;
+
+	make_dir(path, perms);
 
 	group = getgrnam(gr_name);
 	if (!group)
@@ -1334,12 +1339,12 @@ static void make_domain_dirs(void)
 		if (dom_dir->perms)
 			perms = dom_dir->perms;
 		else
-			perms = 0710;
+			perms = 0755;
 
 		if (dom_dir->group)
-			make_dir_virt(buf, perms, dom_dir->group);
+			make_dir_group(buf, perms, dom_dir->group);
 		else
-			make_dir_virt(buf, perms, gr_name);
+			make_dir_group(buf, perms, gr_name);
 
 		plog("---\n"
 		     "Process Directory: %s\n"
@@ -1360,8 +1365,8 @@ static void make_virt_if_dir(void)
 	char gr_name[5] = "qemu";
 
 	/* QEMU operates as qemu:qemu */
-	make_dir_virt(TRACE_CMD_DIR, 0710, gr_name);
-	make_dir_virt(VIRT_DIR, 0710, gr_name);
+	make_dir(TRACE_CMD_DIR, 0755);
+	make_dir_group(VIRT_DIR, 0755, gr_name);
 
 	if (dom_dir_list)
 		make_domain_dirs();

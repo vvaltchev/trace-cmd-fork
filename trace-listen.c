@@ -612,13 +612,21 @@ static int communicate_with_client_net(struct tracecmd_msg_handle *msg_handle)
 static int communicate_with_client_virt(struct tracecmd_msg_handle *msg_handle,
 					const char *domain)
 {
+	int ret;
+
 	msg_handle->version = V2_PROTOCOL;
 
-	if (tracecmd_msg_set_connection(msg_handle->fd, domain) < 0)
+	if (tracecmd_msg_set_connection(msg_handle->fd, domain) < 0) {
+		plog("Failed connection to domain %s\n", domain);
 		return -1;
+	}
 
 	/* read the CPU count, the page size, and options */
-	return tracecmd_msg_initial_setting(msg_handle);
+	ret = tracecmd_msg_initial_setting(msg_handle);
+	if (ret < 0)
+		plog("Failed inital settings for domain %s\n", domain);
+
+	return ret;
 }
 
 static int create_client_file(const char *node, const char *port,

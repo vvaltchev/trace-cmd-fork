@@ -329,7 +329,7 @@ struct tracecmd_msg_handle *
 void tracecmd_msg_handle_close(struct tracecmd_msg_handle *msg_handle);
 
 /* for clients */
-int tracecmd_msg_connect_to_server(int fd);
+int tracecmd_msg_connect_to_server(struct tracecmd_msg_handle *msg_handle);
 int tracecmd_msg_send_init_data_net(struct tracecmd_msg_handle *msg_handle,
 				    int **client_ports);
 int tracecmd_msg_send_init_data_virt(struct tracecmd_msg_handle *msg_handle,
@@ -340,7 +340,8 @@ int tracecmd_msg_finish_sending_metadata(struct tracecmd_msg_handle *msg_handle)
 void tracecmd_msg_send_close_msg(struct tracecmd_msg_handle *msg_handle);
 
 /* for server */
-int tracecmd_msg_set_connection(int fd, const char *domain);
+int tracecmd_msg_set_connection(struct tracecmd_msg_handle *msg_handle,
+				const char *domain);
 int tracecmd_msg_initial_setting(struct tracecmd_msg_handle *msg_handle);
 int tracecmd_msg_send_port_array(struct tracecmd_msg_handle *msg_handle,
 				 int *ports);

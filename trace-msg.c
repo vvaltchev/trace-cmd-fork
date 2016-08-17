@@ -564,9 +564,10 @@ int tracecmd_msg_send_init_data_virt(struct tracecmd_msg_handle *msg_handle,
 	return tracecmd_msg_send_init_data(msg_handle, false, sfds);
 }
 
-int tracecmd_msg_connect_to_server(int fd)
+int tracecmd_msg_connect_to_server(struct tracecmd_msg_handle *msg_handle)
 {
 	struct tracecmd_msg send_msg, recv_msg;
+	int fd = msg_handle->fd;
 	int ret;
 
 	/* connect to a server */
@@ -637,7 +638,8 @@ void tracecmd_msg_handle_close(struct tracecmd_msg_handle *msg_handle)
 	free(msg_handle);
 }
 
-int tracecmd_msg_set_connection(int fd, const char *domain)
+int tracecmd_msg_set_connection(struct tracecmd_msg_handle *msg_handle,
+				const char *domain)
 {
 	struct tracecmd_msg msg;
 	u32 cmd;
@@ -653,11 +655,11 @@ int tracecmd_msg_set_connection(int fd, const char *domain)
 	 * after guest boots. Therefore, the virt-server patiently
 	 * waits for the connection request of a client.
 	 */
-	ret = tracecmd_msg_recv(fd, &msg);
+	ret = tracecmd_msg_recv(msg_handle->fd, &msg);
 	if (ret < 0) {
 		if (!msg.hdr.cmd) {
 			/* No data means QEMU has already died. */
-			close(fd);
+			tracecmd_msg_handle_close(msg_handle);
 			die("Connection refused: %s", domain);
 		}
 		return -ENOMSG;
@@ -674,7 +676,7 @@ int tracecmd_msg_set_connection(int fd, const char *domain)
 	if (ret < 0)
 		goto error;
 
-	ret = tracecmd_msg_send(fd, &msg);
+	ret = tracecmd_msg_send(msg_handle->fd, &msg);
 	if (ret < 0)
 		goto error;
 

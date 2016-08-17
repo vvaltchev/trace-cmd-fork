@@ -96,7 +96,6 @@ static int max_kb;
 
 static bool use_tcp;
 
-struct tracecmd_output *virt_handle;
 static bool virt;
 
 static int do_ptrace;
@@ -2819,13 +2818,10 @@ static void check_protocol_version(struct tracecmd_msg_handle *msg_handle)
 	}
 }
 
-static struct tracecmd_msg_handle *communicate_with_listener_virt(int fd)
+static struct tracecmd_msg_handle *
+communicate_with_listener_virt(int fd)
 {
-
 	struct tracecmd_msg_handle *msg_handle;
-
-	if (tracecmd_msg_connect_to_server(fd) < 0)
-		die("Cannot communicate with server");
 
 	msg_handle = tracecmd_msg_handle_alloc(fd, TRACECMD_MSG_FL_CLIENT);
 	if (!msg_handle)
@@ -2833,6 +2829,9 @@ static struct tracecmd_msg_handle *communicate_with_listener_virt(int fd)
 
 	msg_handle->cpu_count = local_cpu_count;
 	msg_handle->version = V2_PROTOCOL;
+
+	if (tracecmd_msg_connect_to_server(msg_handle) < 0)
+		die("Cannot communicate with server");
 
 	if (tracecmd_msg_send_init_data_virt(msg_handle, &virt_sfds) < 0)
 		die("Cannot send init data");
@@ -2919,13 +2918,26 @@ again:
 	return msg_handle;
 }
 
-static struct tracecmd_msg_handle *
-setup_connection(struct buffer_instance *instance)
+static struct tracecmd_msg_handle *setup_virtio(void)
 {
-	struct tracecmd_msg_handle *msg_handle;
-	struct tracecmd_output *network_handle;
+	int fd;
 
-	msg_handle = setup_network();
+	fd = open(AGENT_CTL_PATH, O_RDWR);
+	if (fd < 0)
+		die("Cannot open %s", AGENT_CTL_PATH);
+
+	return communicate_with_listener_virt(fd);
+}
+
+static void setup_connection(struct buffer_instance *instance)
+{
+	struct tracecmd_output *network_handle;
+	struct tracecmd_msg_handle *msg_handle;
+
+	if (host)
+		msg_handle = setup_network();
+	else
+		msg_handle = setup_virtio();
 
 	/* Now create the handle through this socket */
 	if (msg_handle->version == V2_PROTOCOL) {
@@ -2936,27 +2948,9 @@ setup_connection(struct buffer_instance *instance)
 							      listed_events);
 
 	instance->network_handle = network_handle;
+	instance->msg_handle = msg_handle;
 
 	/* OK, we are all set, let'r rip! */
-	return msg_handle;
-}
-
-static struct tracecmd_msg_handle *setup_virtio(void)
-{
-	struct tracecmd_msg_handle *msg_handle;
-	int fd;
-
-	fd = open(AGENT_CTL_PATH, O_RDWR);
-	if (fd < 0)
-		die("Cannot open %s", AGENT_CTL_PATH);
-
-	msg_handle = communicate_with_listener_virt(fd);
-
-	/* Now create the handle through this socket */
-	virt_handle = tracecmd_create_init_fd_msg(msg_handle, listed_events);
-	tracecmd_msg_finish_sending_metadata(msg_handle);
-
-	return msg_handle;
 }
 
 static void finish_network(struct tracecmd_msg_handle *msg_handle)
@@ -2964,7 +2958,6 @@ static void finish_network(struct tracecmd_msg_handle *msg_handle)
 	if (msg_handle->version == V2_PROTOCOL)
 		tracecmd_msg_send_close_msg(msg_handle);
 	tracecmd_msg_handle_close(msg_handle);
-	free(virt_handle);
 	free(virt_sfds);
 	free(host);
 }
@@ -2990,14 +2983,10 @@ static void start_threads(enum trace_type type, int global)
 	for_all_instances(instance) {
 		int x, pid;
 
-		if (host) {
-			instance->msg_handle = setup_connection(instance);
+		if (host || virt) {
+			setup_connection(instance);
 			if (!instance->msg_handle)
 				die("Failed to make connection");
-		} else if (virt) {
-			instance->msg_handle = setup_virtio();
-			if (!instance->msg_handle)
-				die("Failed to make virt connection");
 		}
 
 		for (x = 0; x < instance->cpu_count; x++) {
@@ -4974,7 +4963,7 @@ static void finalize_record_trace(struct common_record_context *ctx)
 					 instance->tracing_on_init_val);
 	}
 
-	if (host)
+	if (host || virt)
 		tracecmd_output_close(ctx->instance->network_handle);
 }
 

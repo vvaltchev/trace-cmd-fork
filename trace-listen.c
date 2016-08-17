@@ -616,7 +616,7 @@ static int communicate_with_client_virt(struct tracecmd_msg_handle *msg_handle,
 
 	msg_handle->version = V2_PROTOCOL;
 
-	if (tracecmd_msg_set_connection(msg_handle->fd, domain) < 0) {
+	if (tracecmd_msg_set_connection(msg_handle, domain) < 0) {
 		plog("Failed connection to domain %s\n", domain);
 		return -1;
 	}

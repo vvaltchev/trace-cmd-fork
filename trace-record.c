@@ -2964,14 +2964,9 @@ static void finish_network(struct tracecmd_msg_handle *msg_handle)
 	if (msg_handle->version == V2_PROTOCOL)
 		tracecmd_msg_send_close_msg(msg_handle);
 	tracecmd_msg_handle_close(msg_handle);
-	free(host);
-}
-
-static void finish_virt(struct tracecmd_msg_handle *msg_handle)
-{
-	tracecmd_msg_send_close_msg(msg_handle);
 	free(virt_handle);
 	free(virt_sfds);
+	free(host);
 }
 
 static void start_threads(enum trace_type type, int global)
@@ -3166,10 +3161,7 @@ static void record_data(char *date2ts, int flags)
 
 	for_all_instances(instance) {
 		if (instance->msg_handle) {
-			if (host)
-				finish_network(instance->msg_handle);
-			else if (virt)
-				finish_virt(instance->msg_handle);
+			finish_network(instance->msg_handle);
 		} else
 			local = true;
 	}

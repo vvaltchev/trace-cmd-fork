@@ -88,7 +88,6 @@ static int clear_function_filters;
 
 static char *host;
 static int *client_ports;
-static int *virt_sfds;
 static int sfd;
 
 /* Max size to let a per cpu file get */
@@ -2651,7 +2650,8 @@ static int create_recorder(struct buffer_instance *instance, int cpu,
 	if (client_ports) {
 		char *path;
 
-		connect_port(cpu);
+		if (!virt)
+			connect_port(cpu);
 		if (instance->name)
 			path = get_instance_dir(instance);
 		else
@@ -2661,9 +2661,6 @@ static int create_recorder(struct buffer_instance *instance, int cpu,
 							      path);
 		if (instance->name)
 			tracecmd_put_tracing_file(path);
-	} else if (virt_sfds) {
-		recorder = tracecmd_create_recorder_fd(virt_sfds[cpu], cpu,
-						       recorder_flags);
 	} else {
 		file = get_temp_file(instance, cpu);
 		recorder = create_recorder_instance(instance, file, cpu, brass);
@@ -2833,7 +2830,7 @@ communicate_with_listener_virt(int fd)
 	if (tracecmd_msg_connect_to_server(msg_handle) < 0)
 		die("Cannot communicate with server");
 
-	if (tracecmd_msg_send_init_data_virt(msg_handle, &virt_sfds) < 0)
+	if (tracecmd_msg_send_init_data_virt(msg_handle, &client_ports) < 0)
 		die("Cannot send init data");
 
 	return msg_handle;
@@ -2958,7 +2955,7 @@ static void finish_network(struct tracecmd_msg_handle *msg_handle)
 	if (msg_handle->version == V2_PROTOCOL)
 		tracecmd_msg_send_close_msg(msg_handle);
 	tracecmd_msg_handle_close(msg_handle);
-	free(virt_sfds);
+	free(client_ports);
 	free(host);
 }
 

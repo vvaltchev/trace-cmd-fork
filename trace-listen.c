@@ -531,9 +531,6 @@ static int communicate_with_client_net(struct tracecmd_msg_handle *msg_handle)
 
 		msg_handle->version = V2_PROTOCOL;
 
-		/* read the CPU count, the page size, and options */
-		if ((pagesize = tracecmd_msg_initial_setting(msg_handle)) < 0)
-			goto out;
 	} else {
 		/* The client is using the v1 protocol */
 
@@ -616,15 +613,9 @@ static int communicate_with_client_virt(struct tracecmd_msg_handle *msg_handle,
 
 	msg_handle->version = V2_PROTOCOL;
 
-	if (tracecmd_msg_set_connection(msg_handle, domain) < 0) {
-		plog("Failed connection to domain %s\n", domain);
-		return -1;
-	}
-
-	/* read the CPU count, the page size, and options */
-	ret = tracecmd_msg_initial_setting(msg_handle);
+	ret = tracecmd_msg_set_connection(msg_handle, domain);
 	if (ret < 0)
-		plog("Failed inital settings for domain %s\n", domain);
+		plog("Failed connection to domain %s\n", domain);
 
 	return ret;
 }
@@ -835,6 +826,15 @@ static int process_client(struct tracecmd_msg_handle *msg_handle,
 			return ret;
 	} else
 		return -EINVAL;
+
+	/* read the CPU count, the page size, and options */
+	if ((msg_handle->version == V2_PROTOCOL)) {
+		ret = tracecmd_msg_initial_setting(msg_handle);
+		if (ret < 0) {
+			plog("Failed inital settings\n");
+			return -EINVAL;
+		}
+	}
 
 	pagesize = ret;
 

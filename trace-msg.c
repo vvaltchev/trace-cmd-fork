@@ -498,15 +498,14 @@ static int tracecmd_msg_wait_for_msg(int fd, struct tracecmd_msg *msg)
 	return 0;
 }
 
-static int tracecmd_msg_send_init_data(struct tracecmd_msg_handle *msg_handle,
-				       bool net, int **array)
+int tracecmd_msg_send_init_data(struct tracecmd_msg_handle *msg_handle,
+				int **array)
 {
 	struct tracecmd_msg send_msg;
 	struct tracecmd_msg recv_msg;
 	int fd = msg_handle->fd;
 	char path[PATH_MAX];
 	int *ports;
-	int *sfds;
 	int i, cpus;
 	int ret;
 
@@ -529,39 +528,28 @@ static int tracecmd_msg_send_init_data(struct tracecmd_msg_handle *msg_handle,
 		return -EINVAL;
 
 	cpus = ntohl(recv_msg.rinit.cpus);
-
-	if (net) {
-		ports = malloc_or_die(sizeof(int) * cpus);
+	ports = malloc_or_die(sizeof(int) * cpus);
+	if (msg_handle->flags & TRACECMD_MSG_FL_NETWORK) {
 		for (i = 0; i < cpus; i++)
 			ports[i] = ntohl(recv_msg.port_array[i]);
-		*array = ports;
-	} else {
-		sfds = malloc_or_die(sizeof(int) * cpus);
+	} else if (msg_handle->flags & TRACECMD_MSG_FL_VIRT) {
 		/* Open data paths of virtio-serial */
 		for (i = 0; i < cpus; i++) {
 			snprintf(path, PATH_MAX, TRACE_PATH_CPU, i);
-			sfds[i] = open(path, O_WRONLY);
-			if (sfds[i] < 0) {
+			ports[i] = open(path, O_WRONLY);
+			if (ports[i] < 0) {
 				warning("Cannot open %s", TRACE_PATH_CPU, i);
 				return -errno;
 			}
 		}
-		*array = sfds;
+	} else {
+		plog("Neither virt or network specified");
+		return -EINVAL;
 	}
 
+	*array = ports;
+
 	return 0;
-}
-
-int tracecmd_msg_send_init_data_net(struct tracecmd_msg_handle *msg_handle,
-				    int **ports)
-{
-	return tracecmd_msg_send_init_data(msg_handle, true, ports);
-}
-
-int tracecmd_msg_send_init_data_virt(struct tracecmd_msg_handle *msg_handle,
-				     int **sfds)
-{
-	return tracecmd_msg_send_init_data(msg_handle, false, sfds);
 }
 
 int tracecmd_msg_connect_to_server(struct tracecmd_msg_handle *msg_handle)
@@ -618,7 +606,7 @@ tracecmd_msg_handle_alloc(int fd, unsigned long flags)
 	struct tracecmd_msg_handle *handle;
 	int size;
 
-	if (flags == TRACECMD_MSG_FL_SERVER)
+	if (flags & TRACECMD_MSG_FL_SERVER)
 		size = sizeof(struct tracecmd_msg_server);
 	else
 		size = sizeof(struct tracecmd_msg_handle);

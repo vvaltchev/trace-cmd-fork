@@ -306,12 +306,16 @@ enum tracecmd_msg_bits {
 	TRACECMD_MSG_BIT_CLIENT		= 0,
 	TRACECMD_MSG_BIT_SERVER		= 1,
 	TRACECMD_MSG_BIT_USE_TCP	= 2,
+	TRACECMD_MSG_BIT_NETWORK	= 3,
+	TRACECMD_MSG_BIT_VIRT		= 4,
 };
 
 enum tracecmd_msg_flags {
 	TRACECMD_MSG_FL_CLIENT		= (1 << TRACECMD_MSG_BIT_CLIENT),
 	TRACECMD_MSG_FL_SERVER		= (1 << TRACECMD_MSG_BIT_SERVER),
 	TRACECMD_MSG_FL_USE_TCP		= (1 << TRACECMD_MSG_BIT_USE_TCP),
+	TRACECMD_MSG_FL_NETWORK		= (1 << TRACECMD_MSG_BIT_NETWORK),
+	TRACECMD_MSG_FL_VIRT		= (1 << TRACECMD_MSG_BIT_VIRT),
 };
 
 /* for both client and server */
@@ -330,10 +334,8 @@ void tracecmd_msg_handle_close(struct tracecmd_msg_handle *msg_handle);
 
 /* for clients */
 int tracecmd_msg_connect_to_server(struct tracecmd_msg_handle *msg_handle);
-int tracecmd_msg_send_init_data_net(struct tracecmd_msg_handle *msg_handle,
-				    int **client_ports);
-int tracecmd_msg_send_init_data_virt(struct tracecmd_msg_handle *msg_handle,
-				     int **client_ports);
+int tracecmd_msg_send_init_data(struct tracecmd_msg_handle *msg_handle,
+				int **client_ports);
 int tracecmd_msg_metadata_send(struct tracecmd_msg_handle *msg_handle,
 			       const char *buf, int size);
 int tracecmd_msg_finish_sending_metadata(struct tracecmd_msg_handle *msg_handle);

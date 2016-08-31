@@ -2764,12 +2764,6 @@ static void communicate_with_listener_v1_net(struct tracecmd_msg_handle *msg_han
 	}
 }
 
-static void communicate_with_listener_v2_net(struct tracecmd_msg_handle *msg_handle)
-{
-	if (tracecmd_msg_send_init_data_net(msg_handle, &client_ports) < 0)
-		die("Cannot communicate with server");
-}
-
 static void check_protocol_version(struct tracecmd_msg_handle *msg_handle)
 {
 	char buf[BUFSIZ];
@@ -2820,7 +2814,8 @@ communicate_with_listener_virt(int fd)
 {
 	struct tracecmd_msg_handle *msg_handle;
 
-	msg_handle = tracecmd_msg_handle_alloc(fd, TRACECMD_MSG_FL_CLIENT);
+	msg_handle = tracecmd_msg_handle_alloc(fd, TRACECMD_MSG_FL_CLIENT |
+					       TRACECMD_MSG_FL_VIRT);
 	if (!msg_handle)
 		die("Failed to allocate message handle");
 
@@ -2829,9 +2824,6 @@ communicate_with_listener_virt(int fd)
 
 	if (tracecmd_msg_connect_to_server(msg_handle) < 0)
 		die("Cannot communicate with server");
-
-	if (tracecmd_msg_send_init_data_virt(msg_handle, &client_ports) < 0)
-		die("Cannot send init data");
 
 	return msg_handle;
 }
@@ -2888,7 +2880,8 @@ again:
 	if (msg_handle) {
 		msg_handle->fd = sfd;
 	} else {
-		msg_handle = tracecmd_msg_handle_alloc(sfd, TRACECMD_MSG_FL_CLIENT);
+		msg_handle = tracecmd_msg_handle_alloc(sfd, TRACECMD_MSG_FL_CLIENT |
+						       TRACECMD_MSG_FL_NETWORK);
 		if (!msg_handle)
 			die("Failed to allocate message handle");
 
@@ -2906,7 +2899,6 @@ again:
 			close(sfd);
 			goto again;
 		}
-		communicate_with_listener_v2_net(msg_handle);
 	}
 
 	if (msg_handle->version == V1_PROTOCOL)
@@ -2938,6 +2930,8 @@ static void setup_connection(struct buffer_instance *instance)
 
 	/* Now create the handle through this socket */
 	if (msg_handle->version == V2_PROTOCOL) {
+		if (tracecmd_msg_send_init_data(msg_handle, &client_ports) < 0)
+			die("Cannot communicate with server");
 		network_handle = tracecmd_create_init_fd_msg(msg_handle, listed_events);
 		tracecmd_msg_finish_sending_metadata(msg_handle);
 	} else

@@ -809,14 +809,10 @@ static int put_together_file(int cpus, int ofd, const char *node,
 	return ret;
 }
 
-static int process_client(struct tracecmd_msg_handle *msg_handle,
-			  const char *node, const char *port,
-			  const char *domain, int virtpid, int mode)
+static int communicate_with_client(struct tracecmd_msg_handle *msg_handle,
+				   const char *domain, int mode)
 {
-	int *pid_array;
-	int pagesize;
-	int cpus;
-	int ofd;
+	int pagesize = 0;
 	int ret;
 
 	if (mode == NET) {
@@ -840,6 +836,21 @@ static int process_client(struct tracecmd_msg_handle *msg_handle,
 	}
 
 	pagesize = ret;
+	if (!pagesize)
+		return -EINVAL;
+
+	return pagesize;
+}
+
+static int process_client(struct tracecmd_msg_handle *msg_handle,
+			  const char *node, const char *port,
+			  const char *domain, int virtpid,
+			  int pagesize, int mode)
+{
+	int *pid_array;
+	int cpus;
+	int ofd;
+	int ret;
 
 	ofd = create_client_file(node, port, domain, virtpid, mode);
 	pid_array = create_all_readers(node, port, domain, virtpid,
@@ -877,15 +888,16 @@ static int process_client(struct tracecmd_msg_handle *msg_handle,
 }
 
 static int process_client_net(struct tracecmd_msg_handle *msg_handle,
-			      const char *node, const char *port)
+			      const char *node, const char *port,
+			      int pagesize)
 {
-	return process_client(msg_handle, node, port, NULL, 0, NET);
+	return process_client(msg_handle, node, port, NULL, 0, pagesize, NET);
 }
 
 static int process_client_virt(struct tracecmd_msg_handle *msg_handle,
-			       const char *domain, int virtpid)
+			       const char *domain, int virtpid, int pagesize)
 {
-	return process_client(msg_handle, NULL, NULL, domain, virtpid, VIRT);
+	return process_client(msg_handle, NULL, NULL, domain, virtpid, pagesize, VIRT);
 }
 
 static int do_fork(void)
@@ -1061,6 +1073,7 @@ static int do_connection(int cfd, struct sockaddr *peer_addr,
 	struct tracecmd_msg_handle *msg_handle;
 	char host[NI_MAXHOST], service[NI_MAXSERV];
 	int s, ret;
+	int pagesize;
 
 	ret = do_fork();
 	if (ret) {
@@ -1084,16 +1097,26 @@ static int do_connection(int cfd, struct sockaddr *peer_addr,
 			close(cfd);
 			return -1;
 		}
-		ret = process_client_net(msg_handle, host, service);
-	} else if (mode == VIRT)
-		ret = process_client_virt(msg_handle, domain, virtpid);
+		domain = host;
+	}
 
+	pagesize = communicate_with_client(msg_handle, domain, mode);
+
+	ret = -EINVAL;
+	if (pagesize < 0)
+		goto out;
+
+	if (mode == NET)
+		ret = process_client_net(msg_handle, domain, service, pagesize);
+	else if (mode == VIRT)
+		ret = process_client_virt(msg_handle, domain, virtpid, pagesize);
+ out:
 	tracecmd_msg_handle_close(msg_handle);
 
 	if (!debug)
 		exit(ret);
 
-	return 0;
+	return ret;
 }
 
 enum {

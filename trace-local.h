@@ -96,6 +96,8 @@ void trace_listen(int argc, char **argv);
 
 void trace_connect(int argc, char **argv);
 
+void trace_agent(int argc, char **argv);
+
 void trace_restore(int argc, char **argv);
 
 void trace_clear(int argc, char **argv);

@@ -310,6 +310,11 @@ static struct usage_help usage_help[] = {
 		"          -g the group ownership to set it to\n"
 	},
 	{
+		"agent",
+		"guest connection to the host",
+		" %s agent --virt\n"
+	},
+	{
 		NULL, NULL, NULL
 	}
 };

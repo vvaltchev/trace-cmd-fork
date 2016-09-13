@@ -98,6 +98,7 @@ struct command commands[] = {
 	{"mem", trace_mem},
 	{"listen", trace_listen},
 	{"connect", trace_connect},
+	{"agent", trace_agent},
 	{"split", trace_split},
 	{"restore", trace_restore},
 	{"stack", trace_stack},

@@ -42,6 +42,8 @@
 
 #define MAX_OPTION_SIZE 4096
 
+#define PID_AGENT 1
+
 static char *default_output_dir = ".";
 static char *output_dir;
 static char *default_output_file = "trace";
@@ -824,6 +826,9 @@ static int communicate_with_client(struct tracecmd_msg_handle *msg_handle,
 		}
 	}
 
+	if (msg_handle->flags & TRACECMD_MSG_FL_AGENT)
+		return 0;
+
 	pagesize = ret;
 	if (!pagesize)
 		return -EINVAL;
@@ -1115,6 +1120,9 @@ static int do_connection(int cfd, struct sockaddr *peer_addr,
 
 	pagesize = communicate_with_client(msg_handle, domain, mode);
 
+	if (msg_handle->flags & TRACECMD_MSG_FL_AGENT)
+		return PID_AGENT;
+
 	if (pagesize <= 0)
 		return -EINVAL;
 
@@ -1302,7 +1310,7 @@ static void kill_clients(void)
 	int i;
 
 	for (i = 0; i < nr_pids; i++) {
-		if (!client_pids[i].pid)
+		if (!client_pids[i].pid || client_pids[i].pid == PID_AGENT)
 			continue;
 		/* Only kill the clients if we received SIGINT or SIGTERM */
 		if (done)
@@ -1686,6 +1694,8 @@ add_domain(const char *domain, const char *agent_fifo,
 	if (*pid)
 		return mgr;
 
+	unlink_sock = 0;
+
 	guest_listener(mgr);
 
 	exit(0);
@@ -1916,11 +1926,13 @@ static void do_accept_loop(int nfd, int vfd, int mfd)
 				 * don't poll on it for now. The clean up
 				 * will re-institute it.
 				 */
-				if (!debug && pid > 0)
+				if (!debug && pid != PID_AGENT && pid > 0)
 					fds[i].events &= ~POLLIN;
 			}
 
-			if (pid > 0)
+			if (pid == PID_AGENT)
+				client->type = CLIENT_AGENT;
+			else if (pid > 0)
 				add_process(pid, i);
 		}
 	} while (!done);

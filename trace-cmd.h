@@ -309,6 +309,7 @@ enum tracecmd_msg_bits {
 	TRACECMD_MSG_BIT_NETWORK	= 3,
 	TRACECMD_MSG_BIT_VIRT		= 4,
 	TRACECMD_MSG_BIT_MANAGER	= 5,
+	TRACECMD_MSG_BIT_AGENT		= 6,
 };
 
 enum tracecmd_msg_flags {
@@ -318,6 +319,7 @@ enum tracecmd_msg_flags {
 	TRACECMD_MSG_FL_NETWORK		= (1 << TRACECMD_MSG_BIT_NETWORK),
 	TRACECMD_MSG_FL_VIRT		= (1 << TRACECMD_MSG_BIT_VIRT),
 	TRACECMD_MSG_FL_MANAGER		= (1 << TRACECMD_MSG_BIT_MANAGER),
+	TRACECMD_MSG_FL_AGENT		= (1 << TRACECMD_MSG_BIT_AGENT),
 };
 
 enum tracecmd_msg_mngr_type {
@@ -367,6 +369,9 @@ int tracecmd_msg_get_connect(struct tracecmd_msg_handle *msg_handle,
 int tracecmd_msg_send_domain(struct tracecmd_msg_handle *msg_handle,
 			     char *domain, int cpus);
 int tracecmd_msg_send_finish(struct tracecmd_msg_handle *msg_handle);
+
+/* for agent */
+int tracecmd_msg_agent_connect(struct tracecmd_msg_handle *msg_handle);
 
 /* for managers */
 int tracecmd_msg_list_guests(struct tracecmd_msg_handle *msg_handle);

@@ -151,7 +151,9 @@ struct tracecmd_msg_header {
 	C(GLIST,	10,	0),			\
 	C(DOMAIN,	11,	MIN_DOMAIN_SIZE),	\
 	C(FINISH,	12,	0),			\
-	C(MAX,		13,	-1)
+	C(CINIT,	13,	0),			\
+	C(CRINIT,	14,	0),			\
+	C(MAX,		15,	-1)
 
 #undef C
 #define C(a,b,c)	MSG_##a = b
@@ -573,6 +575,49 @@ int tracecmd_msg_send_init_data(struct tracecmd_msg_handle *msg_handle,
 	return 0;
 }
 
+int tracecmd_msg_agent_connect(struct tracecmd_msg_handle *msg_handle)
+{
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+	int ret;
+	u32 cmd;
+
+	tracecmd_msg_init(MSG_CINIT, &msg);
+	ret = tracecmd_msg_send(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	ret = tracecmd_msg_recv_wait(fd, &msg);
+	if (ret < 0) {
+		if (ret == -ETIMEDOUT)
+			warning("Connection timed out\n");
+		return ret;
+	}
+
+	cmd = ntohl(msg.hdr.cmd);
+	if (cmd != MSG_CRINIT) {
+		warning("Expected CRINIT and received %d\n", cmd);
+		return -EINVAL;
+	}
+
+	/* Now we just sit and wait for connection */
+	ret = tracecmd_msg_recv(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * TODO, At this point we are waiting for a connection
+	 * from a manager to perform a record.
+	 */
+	cmd = ntohl(msg.hdr.cmd);
+	if (cmd != MSG_CONNECT) {
+		warning("Expected CONNECT and received %d\n", cmd);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 int tracecmd_msg_connect_to_server(struct tracecmd_msg_handle *msg_handle)
 {
 	struct tracecmd_msg send_msg, recv_msg;
@@ -958,6 +1003,13 @@ int tracecmd_msg_initial_setting(struct tracecmd_msg_handle *msg_handle)
 	}
 
 	cmd = ntohl(msg.hdr.cmd);
+
+	if (cmd == MSG_CINIT) {
+		/* This is a client agent */
+		msg_handle->flags |= TRACECMD_MSG_FL_AGENT;
+		tracecmd_msg_init(MSG_CRINIT, &msg);
+		return tracecmd_msg_send(msg_handle->fd, &msg);
+	}
 
 	if (cmd != MSG_TINIT) {
 		ret = -EINVAL;

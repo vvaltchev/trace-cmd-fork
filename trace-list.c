@@ -393,6 +393,31 @@ static void trace_show_guests(void)
 	close(fd);
 }
 
+static void trace_show_agents(void)
+{
+	struct tracecmd_msg_handle *msg_handle;
+	int fd;
+
+	fd = tracecmd_connect_to_socket(TRACE_MRG_SOCK);
+	if (fd < 0) {
+		warning("Can't connect to %s\n", TRACE_MRG_SOCK);
+		goto out;
+	}
+
+	msg_handle = tracecmd_msg_handle_alloc(fd, TRACECMD_MSG_FL_MANAGER);
+
+	if (!msg_handle) {
+		warning("Failed to allocate message handle");
+		goto out;
+	}
+
+	if (tracecmd_msg_list_agents(msg_handle) < 0)
+		warning("Failed listing agents");
+
+ out:
+	close(fd);
+}
+
 void trace_list(int argc, char **argv)
 {
 	int events = 0;
@@ -405,6 +430,7 @@ void trace_list(int argc, char **argv)
 	int plug_op = 0;
 	int flags = 0;
 	int show_guests = 0;
+	int show_agents = 0;
 	int show_all = 1;
 	int i;
 	const char *arg;
@@ -446,6 +472,10 @@ void trace_list(int argc, char **argv)
 				break;
 			case 'G':
 				show_guests = 1;
+				show_all = 0;
+				break;
+			case 'A':
+				show_agents = 1;
 				show_all = 0;
 				break;
 			case 'p':
@@ -511,6 +541,9 @@ void trace_list(int argc, char **argv)
 
 	if (show_guests)
 		trace_show_guests();
+
+	if (show_agents)
+		trace_show_agents();
 
 	if (show_all) {
 		printf("events:\n");

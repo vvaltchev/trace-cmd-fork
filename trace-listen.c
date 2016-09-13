@@ -1712,6 +1712,7 @@ static int handle_manager(int cfd)
 {
 	struct tracecmd_msg_handle *msg_handle;
 	enum tracecmd_msg_mngr_type type;
+	struct client_list *client;
 	struct manager_list *mgr;
 	char *domain;
 	char *agent_fifo;
@@ -1751,6 +1752,21 @@ static int handle_manager(int cfd)
 			ret = tracecmd_msg_send_domain(msg_handle,
 						       managers[i].domain,
 						       managers[i].nr_cpus);
+			if (ret < 0)
+				break;
+		}
+		if (ret >= 0)
+			tracecmd_msg_send_finish(msg_handle);
+		break;
+	case TRACECMD_MSG_MNG_ALIST:
+		for (i = FD_CONNECTED; i < nr_fds; i++) {
+			if (fds[i].fd < 0)
+				continue;
+			client = &clients[i - FD_CONNECTED];
+			if (client->type != CLIENT_AGENT)
+				continue;
+			ret = tracecmd_msg_send_domain(msg_handle, client->name,
+						       client->cpu_count);
 			if (ret < 0)
 				break;
 		}

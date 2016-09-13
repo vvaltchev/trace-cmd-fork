@@ -160,7 +160,8 @@ struct tracecmd_msg_header {
 	C(FINISH,	12,	0),			\
 	C(CINIT,	13,	MIN_CINIT_SIZE),	\
 	C(CRINIT,	14,	0),			\
-	C(MAX,		15,	-1)
+	C(ALIST,	15,	0),			\
+	C(MAX,		16,	-1)
 
 #undef C
 #define C(a,b,c)	MSG_##a = b
@@ -673,6 +674,9 @@ tracecmd_msg_read_manager(struct tracecmd_msg_handle *msg_handle)
 	case MSG_GLIST:
 		type = TRACECMD_MSG_MNG_GLIST;
 		break;
+	case MSG_ALIST:
+		type = TRACECMD_MSG_MNG_ALIST;
+		break;
 	}
  out:
 	return type;
@@ -733,7 +737,7 @@ static int send_string(struct tracecmd_msg_handle *msg_handle,
 	return tracecmd_msg_send(fd, &msg);
 }
 
-int tracecmd_msg_list_guests(struct tracecmd_msg_handle *msg_handle)
+int tracecmd_msg_list_domains(struct tracecmd_msg_handle *msg_handle)
 {
 	struct tracecmd_msg msg;
 	int fd = msg_handle->fd;
@@ -742,11 +746,6 @@ int tracecmd_msg_list_guests(struct tracecmd_msg_handle *msg_handle)
 	int cpus;
 	int ret;
 	int i;
-
-	tracecmd_msg_init(MSG_GLIST, &msg);
-	ret = tracecmd_msg_send(fd, &msg);
-	if (ret < 0)
-		return ret;
 
 	for (i = 0; ; i++) {
 		ret = tracecmd_msg_recv_wait(fd, &msg);
@@ -773,10 +772,46 @@ int tracecmd_msg_list_guests(struct tracecmd_msg_handle *msg_handle)
 		printf("%s with %d cpus\n", domain, cpus);
 		free(domain);
 	}
-	if (!i)
+
+	return i;
+}
+
+int tracecmd_msg_list_guests(struct tracecmd_msg_handle *msg_handle)
+{
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+	int ret;
+
+	tracecmd_msg_init(MSG_GLIST, &msg);
+	ret = tracecmd_msg_send(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	ret = tracecmd_msg_list_domains(msg_handle);
+
+	if (!ret)
 		printf("No guests registered\n");
 
-	return 0;
+	return ret;
+}
+
+int tracecmd_msg_list_agents(struct tracecmd_msg_handle *msg_handle)
+{
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+	int ret;
+
+	tracecmd_msg_init(MSG_ALIST, &msg);
+	ret = tracecmd_msg_send(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	ret = tracecmd_msg_list_domains(msg_handle);
+
+	if (!ret)
+		printf("No agents registered\n");
+
+	return ret;
 }
 
 int tracecmd_msg_get_connect(struct tracecmd_msg_handle *msg_handle,

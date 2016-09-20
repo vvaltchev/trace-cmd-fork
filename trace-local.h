@@ -163,6 +163,7 @@ char *strstrip(char *str);
 enum buffer_instance_flags {
 	BUFFER_FL_KEEP		= 1 << 0,
 	BUFFER_FL_PROFILE	= 1 << 1,
+	BUFFER_FL_VIRT		= 1 << 2,
 };
 
 struct func_list {

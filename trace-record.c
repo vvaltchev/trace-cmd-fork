@@ -95,8 +95,6 @@ static int max_kb;
 
 static bool use_tcp;
 
-static bool virt;
-
 static int do_ptrace;
 
 static int filter_task;
@@ -2650,7 +2648,7 @@ static int create_recorder(struct buffer_instance *instance, int cpu,
 	if (client_ports) {
 		char *path;
 
-		if (!virt)
+		if (!(instance->flags & BUFFER_FL_VIRT))
 			connect_port(cpu);
 		if (instance->name)
 			path = get_instance_dir(instance);
@@ -2974,7 +2972,7 @@ static void start_threads(enum trace_type type, int global)
 	for_all_instances(instance) {
 		int x, pid;
 
-		if (host || virt) {
+		if (host || (instance->flags & BUFFER_FL_VIRT)) {
 			setup_connection(instance);
 			if (!instance->msg_handle)
 				die("Failed to make connection");
@@ -4718,7 +4716,7 @@ static void parse_record_options(int argc,
 		case 'o':
 			if (host)
 				die("-o incompatible with -N");
-			if (virt)
+			if (ctx->instance->flags & BUFFER_FL_VIRT)
 				die("-o incompatible with --virt");
 			if (IS_START(ctx))
 				die("start does not take output\n"
@@ -4779,7 +4777,7 @@ static void parse_record_options(int argc,
 		case 'N':
 			if (!IS_RECORD(ctx))
 				die("-N only available with record");
-			if (virt)
+			if (ctx->instance->flags & BUFFER_FL_VIRT)
 				die("-N incompatible with --virt");
 			if (ctx->output)
 				die("-N incompatible with -o");
@@ -4796,7 +4794,7 @@ static void parse_record_options(int argc,
 			ctx->instance->cpumask = alloc_mask_from_hex(ctx->instance, optarg);
 			break;
 		case 't':
-			if (virt)
+			if (ctx->instance->flags & BUFFER_FL_VIRT)
 				die("-t incompatible with --virt");
 			if (IS_EXTRACT(ctx))
 				ctx->topt = 1; /* Extract top instance also */
@@ -4869,7 +4867,7 @@ static void parse_record_options(int argc,
 				die("--virt incompatible with -o");
 			if (use_tcp)
 				die("--virt incompatible with -t");
-			virt = true;
+			ctx->instance->flags |= BUFFER_FL_VIRT;
 			break;
 		case OPT_debug:
 			debug = 1;
@@ -4954,7 +4952,7 @@ static void finalize_record_trace(struct common_record_context *ctx)
 					 instance->tracing_on_init_val);
 	}
 
-	if (host || virt)
+	if (host || ctx->instance->flags & BUFFER_FL_VIRT)
 		tracecmd_output_close(ctx->instance->network_handle);
 }
 
@@ -4972,9 +4970,15 @@ static void record_trace(int argc, char **argv,
 	 * If top_instance doesn't have any plugins or events, then
 	 * remove it from being processed.
 	 */
-	if (!__check_doing_something(&top_instance))
+	if (!__check_doing_something(&top_instance)) {
 		first_instance = buffer_instances;
-	else
+		/*
+		 * If only one instance was instantiated and --virt
+		 * was specified, then make it the virt instance.
+		 */
+		if ((ctx->instance->flags & BUFFER_FL_VIRT) && !first_instance->next)
+			first_instance->flags |= BUFFER_FL_VIRT;
+	} else
 		ctx->topt = 1;
 
 	update_first_instance(ctx->instance, ctx->topt);

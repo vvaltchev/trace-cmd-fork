@@ -86,7 +86,6 @@ static int buffers;
 /* Clear all function filters */
 static int clear_function_filters;
 
-static char *host;
 static int *client_ports;
 static int sfd;
 
@@ -2521,7 +2520,7 @@ static void flush(int sig)
 		tracecmd_stop_recording(recorder);
 }
 
-static void connect_port(int cpu)
+static void connect_port(const char *host, int cpu)
 {
 	struct addrinfo hints;
 	struct addrinfo *results, *rp;
@@ -2649,7 +2648,7 @@ static int create_recorder(struct buffer_instance *instance, int cpu,
 		char *path;
 
 		if (!(instance->flags & BUFFER_FL_VIRT))
-			connect_port(cpu);
+			connect_port(instance->host, cpu);
 		if (instance->name)
 			path = get_instance_dir(instance);
 		else
@@ -2826,11 +2825,12 @@ communicate_with_listener_virt(int fd)
 	return msg_handle;
 }
 
-static struct tracecmd_msg_handle *setup_network(void)
+static struct tracecmd_msg_handle *setup_network(struct buffer_instance *instance)
 {
 	struct tracecmd_msg_handle *msg_handle = NULL;
 	struct addrinfo hints;
 	struct addrinfo *result, *rp;
+	char *host = instance->host;
 	int sfd, s;
 	char *server;
 	char *port;
@@ -2848,6 +2848,7 @@ static struct tracecmd_msg_handle *setup_network(void)
 			die("alloctating server");
 		server = strtok_r(host, ":", &p);
 		port = strtok_r(NULL, ":", &p);
+		instance->host = host;
 	}
 
 	memset(&hints, 0, sizeof(hints));
@@ -2921,8 +2922,8 @@ static void setup_connection(struct buffer_instance *instance)
 	struct tracecmd_output *network_handle;
 	struct tracecmd_msg_handle *msg_handle;
 
-	if (host)
-		msg_handle = setup_network();
+	if (instance->host)
+		msg_handle = setup_network(instance);
 	else
 		msg_handle = setup_virtio();
 
@@ -2942,13 +2943,15 @@ static void setup_connection(struct buffer_instance *instance)
 	/* OK, we are all set, let'r rip! */
 }
 
-static void finish_network(struct tracecmd_msg_handle *msg_handle)
+static void finish_network(struct buffer_instance *instance)
 {
+	struct tracecmd_msg_handle *msg_handle = instance->msg_handle;
+
 	if (msg_handle->version == V2_PROTOCOL)
 		tracecmd_msg_send_close_msg(msg_handle);
 	tracecmd_msg_handle_close(msg_handle);
 	free(client_ports);
-	free(host);
+	free(instance->host);
 }
 
 static void start_threads(enum trace_type type, int global)
@@ -2972,7 +2975,7 @@ static void start_threads(enum trace_type type, int global)
 	for_all_instances(instance) {
 		int x, pid;
 
-		if (host || (instance->flags & BUFFER_FL_VIRT)) {
+		if (instance->host || (instance->flags & BUFFER_FL_VIRT)) {
 			setup_connection(instance);
 			if (!instance->msg_handle)
 				die("Failed to make connection");
@@ -3138,9 +3141,9 @@ static void record_data(char *date2ts, int flags)
 	int i;
 
 	for_all_instances(instance) {
-		if (instance->msg_handle) {
-			finish_network(instance->msg_handle);
-		} else
+		if (instance->msg_handle)
+			finish_network(instance);
+		else
 			local = true;
 	}
 
@@ -3971,7 +3974,7 @@ update_plugin_instance(struct buffer_instance *instance,
 	    strcmp(plugin, "wakeup") == 0 ||
 	    strcmp(plugin, "wakeup_rt") == 0) {
 		latency = 1;
-		if (host)
+		if (instance->host)
 			die("Network tracing not available with latency tracer plugins");
 		if (type & TRACE_TYPE_STREAM)
 			die("Streaming is not available with latency tracer plugins");
@@ -4714,7 +4717,7 @@ static void parse_record_options(int argc,
 			ctx->disable = 1;
 			break;
 		case 'o':
-			if (host)
+			if (ctx->instance->host)
 				die("-o incompatible with -N");
 			if (ctx->instance->flags & BUFFER_FL_VIRT)
 				die("-o incompatible with --virt");
@@ -4781,7 +4784,7 @@ static void parse_record_options(int argc,
 				die("-N incompatible with --virt");
 			if (ctx->output)
 				die("-N incompatible with -o");
-			host = optarg;
+			ctx->instance->host = optarg;
 			break;
 		case 'm':
 			if (max_kb)
@@ -4861,7 +4864,7 @@ static void parse_record_options(int argc,
 		case OPT_virt:
 			if (!IS_RECORD(ctx))
 				die("--virt only available with record");
-			if (host)
+			if (ctx->instance->host)
 				die("--virt incompatible with -N");
 			if (ctx->output)
 				die("--virt incompatible with -o");
@@ -4952,7 +4955,7 @@ static void finalize_record_trace(struct common_record_context *ctx)
 					 instance->tracing_on_init_val);
 	}
 
-	if (host || ctx->instance->flags & BUFFER_FL_VIRT)
+	if (ctx->instance->host || ctx->instance->flags & BUFFER_FL_VIRT)
 		tracecmd_output_close(ctx->instance->network_handle);
 }
 

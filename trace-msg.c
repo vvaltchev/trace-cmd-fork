@@ -62,7 +62,7 @@ static inline void dprint(const char *fmt, ...)
 #define MSG_DATA_LEN			(MSG_MAX_LEN - MSG_HDR_LEN)
 
 					/* - header size for error msg */
-#define MSG_META_MAX_LEN		(MSG_MAX_LEN - MIN_META_SIZE)
+#define MSG_META_MAX_LEN		(MSG_MAX_LEN - MIN_DATA_SIZE)
 
 
 #define MIN_TINIT_SIZE	(sizeof(struct tracecmd_msg_header) + \
@@ -72,11 +72,8 @@ static inline void dprint(const char *fmt, ...)
 #define MIN_RINIT_SIZE	(sizeof(struct tracecmd_msg_header) + \
 			 sizeof(struct tracecmd_msg_rinit))
 
-#define MIN_META_SIZE	(sizeof(struct tracecmd_msg_header) + \
-			 sizeof(struct tracecmd_msg_meta))
-
-#define MIN_RCONNECT_SIZE	(sizeof(struct tracecmd_msg_header) + \
-				 sizeof(struct tracecmd_msg_rconnect))
+#define MIN_DATA_SIZE	(sizeof(struct tracecmd_msg_header) + \
+			 sizeof(struct tracecmd_msg_data))
 
 /* use CONNECTION_MSG as a protocol version of trace-msg */
 #define MSG_VERSION		"V2"
@@ -100,10 +97,6 @@ make_server(struct tracecmd_msg_handle *msg_handle)
 	return (struct tracecmd_msg_server *)msg_handle;
 }
 
-struct tracecmd_msg_rconnect {
-	be32 size;
-} __attribute__((packed));
-
 struct tracecmd_msg_opt {
 	be32 size;
 	be32 opt_cmd;
@@ -120,23 +113,23 @@ struct tracecmd_msg_rinit {
 	be32 cpus;
 } __attribute__((packed));
 
-struct tracecmd_msg_meta {
+struct tracecmd_msg_data {
 	be32 size;
 } __attribute__((packed));
 
 struct tracecmd_msg_header {
 	be32	size;
 	be32	cmd;
-} __attribute__((packed));
+};
 
 #define MSG_MAP						\
 	C(ERROR,	0,	0),			\
 	C(CLOSE,	1,	0),			\
 	C(TCONNECT,	2,	0),			\
-	C(RCONNECT,	3,	0),			\
+	C(RCONNECT,	3,	MIN_DATA_SIZE),		\
 	C(TINIT,	4,	MIN_TINIT_SIZE),	\
 	C(RINIT,	5,	MIN_RINIT_SIZE),	\
-	C(SENDMETA,	6,	MIN_META_SIZE),		\
+	C(SENDMETA,	6,	MIN_DATA_SIZE),		\
 	C(FINMETA,	7,	0),
 
 #undef C
@@ -168,17 +161,16 @@ struct tracecmd_msg_error {
 	union {
 		struct tracecmd_msg_tinit tinit;
 		struct tracecmd_msg_rinit rinit;
-		struct tracecmd_msg_meta meta;
+		struct tracecmd_msg_data data;
 	} data;
 } __attribute__((packed));
 
 struct tracecmd_msg {
 	struct tracecmd_msg_header		hdr;
 	union {
-		struct tracecmd_msg_rconnect	rconnect;
 		struct tracecmd_msg_tinit	tinit;
 		struct tracecmd_msg_rinit	rinit;
-		struct tracecmd_msg_meta	meta;
+		struct tracecmd_msg_data	data;
 		struct tracecmd_msg_error	err;
 	};
 	union {
@@ -213,15 +205,15 @@ static int msg_write(int fd, struct tracecmd_msg *msg)
 	return __do_write_check(fd, msg->buf, ntohl(msg->hdr.size) - size);
 }
 
-static int make_rconnect(const char *buf, int buflen, struct tracecmd_msg *msg)
+static int make_data(const char *buf, int buflen, struct tracecmd_msg *msg)
 {
-	msg->rconnect.size = htonl(buflen);
+	msg->data.size = htonl(buflen);
 	msg->buf = malloc(buflen);
 	if (!msg->buf)
 		return -ENOMEM;
 	memcpy(msg->buf, buf, buflen);
 
-	msg->hdr.size = htonl(MIN_RCONNECT_SIZE + buflen);
+	msg->hdr.size = htonl(MIN_DATA_SIZE + buflen);
 
 	return 0;
 }
@@ -458,7 +450,7 @@ static int tracecmd_msg_wait_for_msg(int fd, struct tracecmd_msg *msg)
 	case MSG_RCONNECT:
 		/* Make sure the server is the tracecmd server */
 		if (memcmp(msg->buf, CONNECTION_MSG,
-			   ntohl(msg->rconnect.size) - 1) != 0) {
+			   ntohl(msg->data.size) - 1) != 0) {
 			warning("server not tracecmd server");
 			return -EPROTONOSUPPORT;
 		}
@@ -590,7 +582,8 @@ int tracecmd_msg_set_connection(int fd, const char *domain)
 	else if (cmd != MSG_TCONNECT)
 		return -EINVAL;
 
-	ret = make_rconnect(CONNECTION_MSG, CONNECTION_MSGSIZE, &msg);
+	tracecmd_msg_init(MSG_RCONNECT, &msg);
+	ret = make_data(CONNECTION_MSG, CONNECTION_MSGSIZE, &msg);
 	if (ret < 0)
 		goto error;
 
@@ -723,23 +716,16 @@ int tracecmd_msg_metadata_send(struct tracecmd_msg_handle *msg_handle,
 
 	tracecmd_msg_init(MSG_SENDMETA, &msg);
 
-	msg.buf = malloc(MSG_META_MAX_LEN);
-	if (!msg.buf)
-		return -ENOMEM;
-
-	msg.meta.size = htonl(MSG_META_MAX_LEN);
-	msg.hdr.size = htonl(MIN_META_SIZE + MSG_META_MAX_LEN);
-
 	n = size;
 	do {
 		if (n > MSG_META_MAX_LEN) {
-			memcpy(msg.buf, buf+count, MSG_META_MAX_LEN);
+			ret = make_data(buf+count, MSG_META_MAX_LEN, &msg);
+			if (ret < 0)
+				return -ENOMEM;
 			n -= MSG_META_MAX_LEN;
 			count += MSG_META_MAX_LEN;
 		} else {
-			msg.hdr.size = htonl(MIN_META_SIZE + n);
-			msg.meta.size = htonl(n);
-			memcpy(msg.buf, buf+count, n);
+			ret = make_data(buf+count, n, &msg);
 			n = 0;
 		}
 		ret = msg_write(fd, &msg);
@@ -787,7 +773,7 @@ int tracecmd_msg_collect_metadata(struct tracecmd_msg_handle *msg_handle, int of
 		} else if (cmd != MSG_SENDMETA)
 			goto error;
 
-		n = ntohl(msg.meta.size);
+		n = ntohl(msg.data.size);
 		t = n;
 		s = 0;
 		do {

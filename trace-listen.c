@@ -1134,13 +1134,22 @@ struct client_pid_list {
 };
 
 struct client_list {
-	char		*name;
-	int		pid;
+	char			*name;
+	int			pid;
+	int			fd_idx;
 };
 
 static struct client_pid_list *client_pids;
 static int free_pids;
-static int saved_pids;
+static int nr_pids;
+
+static struct client_list *clients;
+static int free_clients;
+static int nr_clients;
+
+static struct pollfd *fds;
+static int free_fds;
+static int nr_fds;
 
 static void add_process(int pid, int idx)
 {
@@ -1148,22 +1157,25 @@ static void add_process(int pid, int idx)
 	int i;
 
 	if (free_pids) {
-		for (i = 0; i < saved_pids; i++) {
+		for (i = 0; i < nr_pids; i++) {
 			if (!client_pids[i].pid) {
 				client = &client_pids[i];
 				break;
 			}
 		}
-		free_pids--;
-		if (!client)
+		if (client)
+			free_pids--;
+		else {
 			warning("Could not find free pid");
+			free_pids = 0;
+		}
 	}
 	if (!client) {
 		client_pids = realloc(client_pids,
-				      sizeof(*client_pids) * (saved_pids + 1));
+				      sizeof(*client_pids) * (nr_pids + 1));
 		if (!client_pids)
 			pdie("allocating pids");
-		client = &client_pids[saved_pids++];
+		client = &client_pids[nr_pids++];
 	}
 	client->pid = pid;
 	client->fd_idx = idx;
@@ -1174,7 +1186,7 @@ static int active_processes(void)
 	int ret = 0;
 	int i;
 
-	for (i = 0; i < saved_pids; i++) {
+	for (i = 0; i < nr_pids; i++) {
 		if (client_pids[i].pid) {
 			ret = 1;
 			break;
@@ -1184,39 +1196,47 @@ static int active_processes(void)
 	return ret;
 }
 
-static void reset_fds(struct pollfd *fds)
+static void reset_fds(struct pollfd *fd)
 {
-	close(fds->fd);
-	fds->fd = -1;
-	fds->events = 0;
+	close(fd->fd);
+	fd->fd = -1;
+	fd->events = 0;
 }
 
-static void reset_client(struct client_list *clients, int fd_idx)
+static struct client_list *find_client(struct client_list *clients, int fd_idx)
 {
-	int idx;
+	int i;
 
-	if (fd_idx < FD_CONNECTED)
-		return;
+	for (i = 0; i < nr_clients; i++) {
+		if (clients[i].fd_idx == fd_idx)
+			return &clients[i];
+	}
 
-	idx = fd_idx - FD_CONNECTED;
-	plog("Closing %s:%d\n", clients[idx].name, clients[idx].pid);
-	free(clients[idx].name);
-	clients[idx].name = NULL;
-	clients[idx].pid = 0;
+	return NULL;
 }
 
-static void remove_process(int pid, int status, struct pollfd *fds,
-			   struct client_list *clients)
+static void reset_client(struct client_list *client)
 {
+	const char *name;
+
+	name = client->name ? client->name : "client";
+	plog("Closing %s:%d\n", name, client->pid);
+	free(client->name);
+	memset(client, 0, sizeof(*client));
+}
+
+static void remove_process(int pid, int status)
+{
+	struct client_list *client;
 	int idx;
 	int i;
 
-	for (i = 0; i < saved_pids; i++) {
+	for (i = 0; i < nr_pids; i++) {
 		if (client_pids[i].pid == pid)
 			break;
 	}
 
-	if (i == saved_pids)
+	if (i == nr_pids)
 		return;
 
 	idx = client_pids[i].fd_idx;
@@ -1224,7 +1244,9 @@ static void remove_process(int pid, int status, struct pollfd *fds,
 	/* If this process errored, close the fd */
 	if (status) {
 		reset_fds(&fds[idx]);
-		reset_client(clients, idx);
+		client = find_client(clients, idx);
+		if (client)
+			reset_client(client);
 	} else
 		fds[idx].events |= POLLIN;
 
@@ -1236,7 +1258,7 @@ static void kill_clients(void)
 {
 	int i;
 
-	for (i = 0; i < saved_pids; i++) {
+	for (i = 0; i < nr_pids; i++) {
 		if (!client_pids[i].pid)
 			continue;
 		/* Only kill the clients if we received SIGINT or SIGTERM */
@@ -1245,10 +1267,10 @@ static void kill_clients(void)
 		waitpid(client_pids[i].pid, NULL, 0);
 	}
 
-	saved_pids = 0;
+	nr_pids = 0;
 }
 
-static void clean_up(struct pollfd *fds, struct client_list *clients)
+static void clean_up(void)
 {
 	int status;
 	int ret;
@@ -1257,47 +1279,91 @@ static void clean_up(struct pollfd *fds, struct client_list *clients)
 	do {
 		ret = waitpid(0, &status, WNOHANG);
 		if (ret > 0)
-			remove_process(ret, WEXITSTATUS(status), fds, clients);
+			remove_process(ret, WEXITSTATUS(status));
 	} while (ret > 0);
 }
 
 static void
-update_client(struct client_list *clients, int nr,
-	      char *domain, int virtpid)
+update_client(struct client_list *client, char *domain, int virtpid)
 {
-	clients[nr].name = domain;
-	clients[nr].pid = virtpid;
+	client->name = domain;
+	client->pid = virtpid;
 }
 
-static struct client_list *
-add_client(struct client_list *clients, int nr, char *domain, int virtpid)
+static int get_new_fd(void)
 {
-	nr -= FD_CONNECTED;
+	void *new;
+	int idx;
 
-	clients = realloc(clients, sizeof(*clients) * (nr + 1));
-	if (!clients)
-		return NULL;
+	if (free_fds) {
+		for (idx = FD_CONNECTED; idx < nr_fds; idx++)
+			if (fds[idx].fd < 0)
+				break;
+		if (idx == nr_fds) {
+			warning("Could not find free file descriptor");
+			free_fds = 0;
+		} else
+			free_fds--;
+	} else
+		idx = nr_fds;
 
-	update_client(clients, nr, domain, virtpid);
+	if (idx == nr_fds) {
+		new = realloc(fds, sizeof(*fds) * (nr_fds + 1));
+		if (!new)
+			return -1;
+		fds = new;
+		nr_fds++;
+	}
 
-	return clients;
+	memset(&fds[idx], 0, sizeof(*fds));
+	return idx;
+}
+
+static struct client_list *get_new_client(int fd_idx)
+{
+	struct client_list *client;
+	void *new;
+	int idx;
+
+	if (free_clients) {
+		for (idx = 0; idx < nr_clients; idx++)
+			if (!clients[idx].pid)
+				break;
+		if (idx == nr_clients) {
+			warning("could not find free client");
+			free_clients = 0;
+		}
+	} else
+		idx = nr_clients;
+
+	if (idx == nr_clients) {
+		new = realloc(clients, sizeof(*clients) * (nr_clients + 1));
+		if (!new)
+			return NULL;
+		clients = new;
+		idx = nr_clients++;
+	}
+
+	client = &clients[idx];
+	client->fd_idx = fd_idx;
+
+	return client;
 }
 
 static void do_accept_loop(int nfd, int vfd)
 {
-	struct client_list *clients = NULL;
 	struct client_list *client;
 	struct sockaddr addr;
 	socklen_t addrlen;
-	struct pollfd *fds;
 	char *domain = NULL;
 	int timeout = -1;
-	int free_fds = 0;
-	int nr_fds = 2;
 	int virtpid;
 	int cfd, pid;
 	int ret;
+	int idx;
 	int i;
+
+	nr_fds = FD_CONNECTED;
 
 	fds = calloc(nr_fds, sizeof(struct pollfd));
 	if (!fds)
@@ -1322,7 +1388,7 @@ static void do_accept_loop(int nfd, int vfd)
 
 		if (ret < 0) {
 			if (errno == EINTR) {
-				clean_up(fds, clients);
+				clean_up();
 				continue;
 			}
 			pdie("poll");
@@ -1330,16 +1396,17 @@ static void do_accept_loop(int nfd, int vfd)
 
 		if (!ret) {
 			/* Timed out */
-			clean_up(fds, clients);
+			clean_up();
 			continue;
 		}
 
 		for (i = 0; i < nr_fds; i++) {
 
 			if (fds[i].revents & POLLHUP) {
+				client = find_client(clients, i);
 				reset_fds(&fds[i]);
-				reset_client(clients, i);
-				if (i < FD_CONNECTED)
+				reset_client(client);
+				if (i >= FD_CONNECTED)
 					free_fds++;
 				continue;
 			}
@@ -1357,8 +1424,10 @@ static void do_accept_loop(int nfd, int vfd)
 				printf("connected!\n");
 				if (cfd < 0 && errno == EINTR)
 					continue;
-				if (cfd < 0)
-					pdie("connecting");
+				if (cfd < 0) {
+					warning("Failed to connect");
+					continue;
+				}
 
 				/*
 				 * The virt server connects when the machine
@@ -1366,8 +1435,6 @@ static void do_accept_loop(int nfd, int vfd)
 				 * tracing yet. Just add it to the poll list.
 				 */
 				if (i == FD_VIRT) {
-					void *new;
-					int fd;
 
 					virtpid = get_virtpid(cfd);
 					if (virtpid < 0) {
@@ -1384,51 +1451,30 @@ static void do_accept_loop(int nfd, int vfd)
 						continue;
 					}
 
-					if (free_fds) {
-						int x;
-
-						for (x = FD_CONNECTED; x < nr_fds; x++)
-							if (fds[x].fd < 0)
-								break;
-						if (x == nr_fds) {
-							warning("Could not find free file descriptor");
-							free_fds = 0;
-						} else {
-							update_client(clients, x,
-								      domain, virtpid);
-							free_fds--;
-							fd = x;
-						}
-					} else {
-						new = add_client(clients, nr_fds,
-								 domain, virtpid);
-						if (!new) {
-							plog("Failed to allocate client for %s:%d\n",
-							     domain, virtpid);
-							continue;
-						}
-						clients = new;
-						fd = nr_fds;
+					idx = get_new_fd();
+					if (idx < 0) {
+						plog("Failed to allocate for new connection for %s",
+						     domain);
+						close(cfd);
+						continue;
 					}
+
+					client = get_new_client(idx);
+					if (!client) {
+						plog("Failed to allocate client for %s:%d\n",
+						     domain, virtpid);
+						continue;
+					}
+
+					update_client(client, domain, virtpid);
 
 					plog("start %s:%d\n", domain, virtpid);
 
-					if (fd == nr_fds) {
-						new = realloc(fds, sizeof(*fds) * (nr_fds + 1));
-						if (!new) {
-							plog("Failed to allocate for new connection for %s", domain);
-							close(cfd);
-							continue;
-						}
-						fds = new;
-						nr_fds++;
-					}
-
-					memset(&fds[fd], 0, sizeof(*fds));
-					fds[fd].fd = cfd;
-					fds[fd].events = POLLIN | POLLHUP;
+					fds[idx].fd = cfd;
+					fds[idx].events = POLLIN | POLLHUP;
 
 					continue;
+
 				} else {
 					virtpid = 0;
 					domain = NULL;
@@ -1439,7 +1485,11 @@ static void do_accept_loop(int nfd, int vfd)
 					plog("Failed to dup fd");
 					continue;
 				}
-				client = &clients[i - FD_CONNECTED];
+				client = find_client(clients, i);
+				if (!client) {
+					/* warn and disable? */
+					continue;
+				}
 			}
 
 			if (i == FD_NET)
@@ -1449,7 +1499,7 @@ static void do_accept_loop(int nfd, int vfd)
 						    client->name,
 						    client->pid, VIRT);
 				/*
-				 * The client is accessing this file descriptor,
+				 * The child process is accessing this file descriptor,
 				 * don't poll on it for now. The clean up
 				 * will re-institute it.
 				 */
@@ -1463,13 +1513,15 @@ static void do_accept_loop(int nfd, int vfd)
 	} while (!done);
 
 	/* Get any final stragglers */
-	clean_up(fds, clients);
+	clean_up();
 
 	for (i = 0; i < nr_fds; i++) {
 		if (fds[i].fd < 0)
 			continue;
 		close(fds[i].fd);
-		reset_client(clients, i);
+		client = find_client(clients, i);
+		if (client)
+			reset_client(client);
 	}
 
 	free(fds);

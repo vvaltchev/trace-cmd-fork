@@ -1009,6 +1009,7 @@ static char *get_guest_domain_from_pid(int pid)
 	char buf[BUFSIZ];
 	char path[PATH_MAX];
 	char *domain;
+	char *eq, *comma;
 	int fd;
 	int r;
 
@@ -1030,8 +1031,14 @@ static char *get_guest_domain_from_pid(int pid)
 			/* We better have something */
 			if (r < 1)
 				goto fail;
-			domain = strdup(buf);
 			close(fd);
+			if ((eq = strstr(buf, "="))) {
+				eq++;
+				if ((comma = strstr(eq, ",")))
+					*comma = '\0';
+				domain = strdup(eq);
+			} else
+				domain = strdup(buf);
 			return domain;
 		}
 	} while (r);

@@ -1270,6 +1270,7 @@ static void make_domain_dirs(void)
 
 	plog("---\n");
 	free(dom_dir_list);
+	dom_dir_list = NULL;
 }
 
 static void make_virt_if_dir(void)

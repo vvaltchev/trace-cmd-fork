@@ -4641,6 +4641,16 @@ static void handle_date_longopt(struct common_record_context *ctx)
 	ctx->data_flags |= DATA_FL_DATE;
 }
 
+static void handle_stderr_longopt()
+{
+	/* if -o was used (for profile), ignore this */
+	if (save_stdout >= 0)
+		return;
+	save_stdout = dup(1);
+	close(1);
+	dup2(2, 1);
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4789,12 +4799,7 @@ static void parse_record_options(int argc,
 			ctx->events = 1;
 			break;
 		case OPT_stderr:
-			/* if -o was used (for profile), ignore this */
-			if (save_stdout >= 0)
-				break;
-			save_stdout = dup(1);
-			close(1);
-			dup2(2, 1);
+			handle_stderr_longopt();
 			break;
 		case OPT_bycomm:
 			trace_profile_set_merge_like_comms();

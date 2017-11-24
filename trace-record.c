@@ -4623,6 +4623,16 @@ static void handle_use_tcp_option(struct common_record_context *ctx)
 		use_tcp = 1;
 }
 
+static void handle_add_named_buffer_opt(struct common_record_context *ctx)
+{
+	ctx->instance = create_instance(optarg);
+	if (!ctx->instance)
+		die("Failed to create instance");
+	add_instance(ctx->instance);
+	if (IS_PROFILE(ctx))
+		ctx->instance->profile = 1;
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4748,12 +4758,7 @@ static void parse_record_options(int argc,
 			ctx->instance->buffer_size = atoi(optarg);
 			break;
 		case 'B':
-			ctx->instance = create_instance(optarg);
-			if (!ctx->instance)
-				die("Failed to create instance");
-			add_instance(ctx->instance);
-			if (IS_PROFILE(ctx))
-				ctx->instance->profile = 1;
+			handle_add_named_buffer_opt(ctx);
 			break;
 		case 'k':
 			keep = 1;

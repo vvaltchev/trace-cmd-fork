@@ -4651,6 +4651,14 @@ static void handle_stderr_longopt()
 	dup2(2, 1);
 }
 
+static void handle_tsoffset_longopt(struct common_record_context *ctx)
+{
+	ctx->date2ts = strdup(optarg);
+	if (ctx->data_flags & DATA_FL_DATE)
+		die("Can not use both --date and --ts-offset");
+	ctx->data_flags |= DATA_FL_OFFSET;
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4805,10 +4813,7 @@ static void parse_record_options(int argc,
 			trace_profile_set_merge_like_comms();
 			break;
 		case OPT_tsoffset:
-			ctx->date2ts = strdup(optarg);
-			if (ctx->data_flags & DATA_FL_DATE)
-				die("Can not use both --date and --ts-offset");
-			ctx->data_flags |= DATA_FL_OFFSET;
+			handle_tsoffset_longopt(ctx);
 			break;
 		case OPT_max_graph_depth:
 			free(ctx->max_graph_depth);

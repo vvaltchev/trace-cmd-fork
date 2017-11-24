@@ -4528,12 +4528,27 @@ static void handle_trace_children_option(struct common_record_context *ctx)
 	}
 }
 
+static void handle_tracer_option(struct common_record_context *ctx)
+{
+	const char *plugin = NULL;
+
+	if (ctx->instance->plugin)
+		die("only one plugin allowed");
+	for (plugin = optarg; isspace(*plugin); plugin++)
+		;
+	ctx->instance->plugin = plugin;
+	for (optarg += strlen(optarg) - 1;
+		optarg > plugin && isspace(*optarg); optarg--)
+		;
+	optarg++;
+	optarg[0] = '\0';
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
 				 struct common_record_context *ctx)
 {
-	const char *plugin = NULL;
 	const char *option;
 	struct event_list *event = NULL;
 	struct event_list *last_event = NULL;
@@ -4607,16 +4622,7 @@ static void parse_record_options(int argc,
 			ctx->filtered = 1;
 			break;
 		case 'p':
-			if (ctx->instance->plugin)
-				die("only one plugin allowed");
-			for (plugin = optarg; isspace(*plugin); plugin++)
-				;
-			ctx->instance->plugin = plugin;
-			for (optarg += strlen(optarg) - 1;
-			     optarg > plugin && isspace(*optarg); optarg--)
-				;
-			optarg++;
-			optarg[0] = '\0';
+			handle_tracer_option(ctx);
 			break;
 		case 'D':
 			ctx->total_disable = 1;

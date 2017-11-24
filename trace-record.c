@@ -4633,6 +4633,14 @@ static void handle_add_named_buffer_opt(struct common_record_context *ctx)
 		ctx->instance->profile = 1;
 }
 
+static void handle_date_longopt(struct common_record_context *ctx)
+{
+	ctx->date = 1;
+	if (ctx->data_flags & DATA_FL_OFFSET)
+		die("Can not use both --date and --ts-offset");
+	ctx->data_flags |= DATA_FL_DATE;
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4767,10 +4775,7 @@ static void parse_record_options(int argc,
 			ignore_event_not_found = 1;
 			break;
 		case OPT_date:
-			ctx->date = 1;
-			if (ctx->data_flags & DATA_FL_OFFSET)
-				die("Can not use both --date and --ts-offset");
-			ctx->data_flags |= DATA_FL_DATE;
+			handle_date_longopt(ctx);
 			break;
 		case OPT_funcstack:
 			func_stack = 1;

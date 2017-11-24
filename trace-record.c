@@ -4667,6 +4667,15 @@ static void handle_max_graph_depth_longopt(struct common_record_context *ctx)
 		die("Could not allocate option");
 }
 
+static void handle_module_longopt(struct common_record_context *ctx)
+{
+	if (ctx->instance->filter_mod)
+		add_func(&ctx->instance->filter_funcs,
+				ctx->instance->filter_mod, "*");
+	ctx->instance->filter_mod = optarg;
+	ctx->filtered = 0;
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4830,11 +4839,7 @@ static void parse_record_options(int argc,
 			debug = 1;
 			break;
 		case OPT_module:
-			if (ctx->instance->filter_mod)
-				add_func(&ctx->instance->filter_funcs,
-					 ctx->instance->filter_mod, "*");
-			ctx->instance->filter_mod = optarg;
-			ctx->filtered = 0;
+			handle_module_longopt(ctx);
 			break;
 		case OPT_quiet:
 		case 'q':

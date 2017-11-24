@@ -4659,6 +4659,14 @@ static void handle_tsoffset_longopt(struct common_record_context *ctx)
 	ctx->data_flags |= DATA_FL_OFFSET;
 }
 
+static void handle_max_graph_depth_longopt(struct common_record_context *ctx)
+{
+	free(ctx->max_graph_depth);
+	ctx->max_graph_depth = strdup(optarg);
+	if (!ctx->max_graph_depth)
+		die("Could not allocate option");
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4816,10 +4824,7 @@ static void parse_record_options(int argc,
 			handle_tsoffset_longopt(ctx);
 			break;
 		case OPT_max_graph_depth:
-			free(ctx->max_graph_depth);
-			ctx->max_graph_depth = strdup(optarg);
-			if (!ctx->max_graph_depth)
-				die("Could not allocate option");
+			handle_max_graph_depth_longopt(ctx);
 			break;
 		case OPT_debug:
 			debug = 1;

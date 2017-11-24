@@ -4418,6 +4418,23 @@ static void init_common_record_context(struct common_record_context *ctx,
 #define IS_PROFILE(ctx) ((ctx)->curr_cmd == CMD_profile)
 #define IS_RECORD(ctx) ((ctx)->curr_cmd == CMD_record)
 
+
+static const struct option record_long_options[] = {
+	{"date", no_argument, NULL, OPT_date},
+	{"func-stack", no_argument, NULL, OPT_funcstack},
+	{"nosplice", no_argument, NULL, OPT_nosplice},
+	{"profile", no_argument, NULL, OPT_profile},
+	{"stderr", no_argument, NULL, OPT_stderr},
+	{"by-comm", no_argument, NULL, OPT_bycomm},
+	{"ts-offset", required_argument, NULL, OPT_tsoffset},
+	{"max-graph-depth", required_argument, NULL, OPT_max_graph_depth},
+	{"debug", no_argument, NULL, OPT_debug},
+	{"quiet", no_argument, NULL, OPT_quiet},
+	{"help", no_argument, NULL, '?'},
+	{"module", required_argument, NULL, OPT_module},
+	{NULL, 0, NULL, 0}
+};
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4431,6 +4448,12 @@ static void parse_record_options(int argc,
 	char *pid;
 	char *sav;
 	int neg_event = 0;
+	const char *opts;
+
+	if (IS_EXTRACT(ctx))
+		opts = "+haf:Fp:co:O:sr:g:l:n:P:N:tb:B:ksiT";
+	else
+		opts = "+hae:f:Fp:cC:dDGo:O:s:r:vg:l:n:P:N:tb:R:B:ksSiTm:M:H:q";
 
 	init_common_record_context(ctx, curr_cmd);
 
@@ -4438,30 +4461,13 @@ static void parse_record_options(int argc,
 		int option_index = 0;
 		int ret;
 		int c;
-		const char *opts;
-		static struct option long_options[] = {
-			{"date", no_argument, NULL, OPT_date},
-			{"func-stack", no_argument, NULL, OPT_funcstack},
-			{"nosplice", no_argument, NULL, OPT_nosplice},
-			{"profile", no_argument, NULL, OPT_profile},
-			{"stderr", no_argument, NULL, OPT_stderr},
-			{"by-comm", no_argument, NULL, OPT_bycomm},
-			{"ts-offset", required_argument, NULL, OPT_tsoffset},
-			{"max-graph-depth", required_argument, NULL, OPT_max_graph_depth},
-			{"debug", no_argument, NULL, OPT_debug},
-			{"quiet", no_argument, NULL, OPT_quiet},
-			{"help", no_argument, NULL, '?'},
-			{"module", required_argument, NULL, OPT_module},
-			{NULL, 0, NULL, 0}
-		};
 
-		if (IS_EXTRACT(ctx))
-			opts = "+haf:Fp:co:O:sr:g:l:n:P:N:tb:B:ksiT";
-		else
-			opts = "+hae:f:Fp:cC:dDGo:O:s:r:vg:l:n:P:N:tb:R:B:ksSiTm:M:H:q";
-		c = getopt_long (argc-1, argv+1, opts, long_options, &option_index);
+		c = getopt_long(argc-1, argv+1, opts,
+				record_long_options, &option_index);
+
 		if (c == -1)
 			break;
+
 		switch (c) {
 		case 'h':
 			usage(argv);

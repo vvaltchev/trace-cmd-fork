@@ -4597,6 +4597,15 @@ static void handle_only_the_specified_events(struct common_record_context *ctx,
 		ctx->events = 0;
 }
 
+static void handle_send_data_remotely_opt(struct common_record_context *ctx)
+{
+	if (!IS_RECORD(ctx))
+		die("-N only available with record");
+	if (ctx->output)
+		die("-N incompatible with -o");
+	host = optarg;
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4707,11 +4716,7 @@ static void parse_record_options(int argc,
 			rt_prio = atoi(optarg);
 			break;
 		case 'N':
-			if (!IS_RECORD(ctx))
-				die("-N only available with record");
-			if (ctx->output)
-				die("-N incompatible with -o");
-			host = optarg;
+			handle_send_data_remotely_opt(ctx);
 			break;
 		case 'm':
 			if (max_kb)

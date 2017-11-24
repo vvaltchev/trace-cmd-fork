@@ -4514,6 +4514,20 @@ static void handle_pid_option()
 	free(pids);
 }
 
+static void handle_trace_children_option(struct common_record_context *ctx)
+{
+	test_set_event_pid();
+	if (!have_event_fork) {
+#ifdef NO_PTRACE
+		die("-c invalid: ptrace not supported");
+#endif
+		do_ptrace = 1;
+	} else {
+		save_option("event-fork");
+		ctx->do_child = 1;
+	}
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4570,16 +4584,7 @@ static void parse_record_options(int argc,
 			handle_pid_option();
 			break;
 		case 'c':
-			test_set_event_pid();
-			if (!have_event_fork) {
-#ifdef NO_PTRACE
-				die("-c invalid: ptrace not supported");
-#endif
-				do_ptrace = 1;
-			} else {
-				save_option("event-fork");
-				ctx->do_child = 1;
-			}
+			handle_trace_children_option(ctx);
 			break;
 		case 'C':
 			ctx->instance->clock = optarg;

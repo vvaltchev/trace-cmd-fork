@@ -4606,6 +4606,15 @@ static void handle_send_data_remotely_opt(struct common_record_context *ctx)
 	host = optarg;
 }
 
+static void handle_max_bufsize_opt(struct common_record_context *ctx)
+{
+	if (max_kb)
+		die("-m can only be specified once");
+	if (!IS_RECORD(ctx))
+		die("only record take 'm' option");
+	max_kb = atoi(optarg);
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4719,11 +4728,7 @@ static void parse_record_options(int argc,
 			handle_send_data_remotely_opt(ctx);
 			break;
 		case 'm':
-			if (max_kb)
-				die("-m can only be specified once");
-			if (!IS_RECORD(ctx))
-				die("only record take 'm' option");
-			max_kb = atoi(optarg);
+			handle_max_bufsize_opt(ctx);
 			break;
 		case 'M':
 			ctx->instance->cpumask = alloc_mask_from_hex(optarg);

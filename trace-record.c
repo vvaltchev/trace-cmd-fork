@@ -4544,6 +4544,36 @@ static void handle_tracer_option(struct common_record_context *ctx)
 	optarg[0] = '\0';
 }
 
+static void handle_output_option(struct common_record_context *ctx)
+{
+	if (host)
+		die("-o incompatible with -N");
+	if (IS_START(ctx))
+		die("start does not take output\n"
+			"Did you mean 'record'?");
+	if (IS_STREAM(ctx))
+		die("stream does not take output\n"
+			"Did you mean 'record'?");
+	if (ctx->output)
+		die("only one output file allowed");
+	ctx->output = optarg;
+
+	if (IS_PROFILE(ctx)) {
+		int fd;
+
+		/* pipe the output to this file instead of stdout */
+		save_stdout = dup(1);
+		close(1);
+		fd = open(optarg, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (fd < 0)
+			die("can't write to %s", optarg);
+		if (fd != 1) {
+			dup2(fd, 1);
+			close(fd);
+		}
+	}
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4631,32 +4661,7 @@ static void parse_record_options(int argc,
 			ctx->disable = 1;
 			break;
 		case 'o':
-			if (host)
-				die("-o incompatible with -N");
-			if (IS_START(ctx))
-				die("start does not take output\n"
-				    "Did you mean 'record'?");
-			if (IS_STREAM(ctx))
-				die("stream does not take output\n"
-				    "Did you mean 'record'?");
-			if (ctx->output)
-				die("only one output file allowed");
-			ctx->output = optarg;
-
-			if (IS_PROFILE(ctx)) {
-				int fd;
-
-				/* pipe the output to this file instead of stdout */
-				save_stdout = dup(1);
-				close(1);
-				fd = open(optarg, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-				if (fd < 0)
-					die("can't write to %s", optarg);
-				if (fd != 1) {
-					dup2(fd, 1);
-					close(fd);
-				}
-			}
+			handle_output_option(ctx);
 			break;
 		case 'O':
 			option = optarg;

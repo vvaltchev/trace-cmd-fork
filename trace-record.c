@@ -4574,6 +4574,20 @@ static void handle_output_option(struct common_record_context *ctx)
 	}
 }
 
+static void handle_wakeup_interval_option(struct common_record_context *ctx,
+					  char **argv)
+{
+	if (IS_EXTRACT(ctx)) {
+		if (optarg)
+			usage(argv);
+		recorder_flags |= TRACECMD_RECORD_SNAPSHOT;
+		return;
+	}
+	if (!optarg)
+		usage(argv);
+	sleep_time = atoi(optarg);
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4675,15 +4689,7 @@ static void parse_record_options(int argc,
 			ctx->events = 1;
 			break;
 		case 's':
-			if (IS_EXTRACT(ctx)) {
-				if (optarg)
-					usage(argv);
-				recorder_flags |= TRACECMD_RECORD_SNAPSHOT;
-				break;
-			}
-			if (!optarg)
-				usage(argv);
-			sleep_time = atoi(optarg);
+			handle_wakeup_interval_option(ctx, argv);
 			break;
 		case 'S':
 			ctx->manual = 1;

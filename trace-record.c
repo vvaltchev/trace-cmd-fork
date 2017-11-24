@@ -4496,6 +4496,24 @@ static void handle_trigger_option(struct event_list *event,
 	add_trigger(event, optarg);
 }
 
+static void handle_pid_option()
+{
+	char *pids;
+	char *pid;
+	char *sav;
+
+	test_set_event_pid();
+	pids = strdup(optarg);
+	if (!pids)
+		die("strdup");
+	pid = strtok_r(pids, ",", &sav);
+	while (pid) {
+		add_filter_pid(atoi(pid), 0);
+		pid = strtok_r(NULL, ",", &sav);
+	}
+	free(pids);
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4505,9 +4523,6 @@ static void parse_record_options(int argc,
 	const char *option;
 	struct event_list *event = NULL;
 	struct event_list *last_event = NULL;
-	char *pids;
-	char *pid;
-	char *sav;
 	int neg_event = 0;
 	const char *opts;
 
@@ -4552,16 +4567,7 @@ static void parse_record_options(int argc,
 			ctx->global = 1;
 			break;
 		case 'P':
-			test_set_event_pid();
-			pids = strdup(optarg);
-			if (!pids)
-				die("strdup");
-			pid = strtok_r(pids, ",", &sav);
-			while (pid) {
-				add_filter_pid(atoi(pid), 0);
-				pid = strtok_r(NULL, ",", &sav);
-			}
-			free(pids);
+			handle_pid_option();
 			break;
 		case 'c':
 			test_set_event_pid();

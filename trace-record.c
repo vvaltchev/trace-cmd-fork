@@ -4435,6 +4435,16 @@ static const struct option record_long_options[] = {
 	{NULL, 0, NULL, 0}
 };
 
+static void handle_save_format_for_all_events(struct common_record_context *ctx)
+{
+	if (IS_EXTRACT(ctx)) {
+		add_all_instances();
+	} else {
+		ctx->record_all = 1;
+		record_all_events();
+	}
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4473,12 +4483,7 @@ static void parse_record_options(int argc,
 			usage(argv);
 			break;
 		case 'a':
-			if (IS_EXTRACT(ctx)) {
-				add_all_instances();
-			} else {
-				ctx->record_all = 1;
-				record_all_events();
-			}
+			handle_save_format_for_all_events(ctx);
 			break;
 		case 'e':
 			ctx->events = 1;

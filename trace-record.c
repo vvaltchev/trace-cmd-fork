@@ -4445,6 +4445,30 @@ static void handle_save_format_for_all_events(struct common_record_context *ctx)
 	}
 }
 
+static void handle_event_option(struct common_record_context *ctx,
+				struct event_list **event_ref,
+				struct event_list **last_event_ref,
+				int neg_event)
+{
+	struct event_list *event;
+
+	ctx->events = 1;
+	event = malloc(sizeof(*event));
+	if (!event)
+		die("Failed to allocate event %s", optarg);
+	memset(event, 0, sizeof(*event));
+	event->event = optarg;
+	add_event(ctx->instance, event);
+	event->neg = neg_event;
+	event->filter = NULL;
+
+	*event_ref = event;
+	*last_event_ref = event;
+
+	if (!ctx->record_all)
+		list_event(optarg);
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4486,19 +4510,7 @@ static void parse_record_options(int argc,
 			handle_save_format_for_all_events(ctx);
 			break;
 		case 'e':
-			ctx->events = 1;
-			event = malloc(sizeof(*event));
-			if (!event)
-				die("Failed to allocate event %s", optarg);
-			memset(event, 0, sizeof(*event));
-			event->event = optarg;
-			add_event(ctx->instance, event);
-			event->neg = neg_event;
-			event->filter = NULL;
-			last_event = event;
-
-			if (!ctx->record_all)
-				list_event(optarg);
+			handle_event_option(ctx, &event, &last_event, neg_event);
 			break;
 		case 'f':
 			if (!last_event)

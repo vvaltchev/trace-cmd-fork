@@ -4588,6 +4588,15 @@ static void handle_wakeup_interval_option(struct common_record_context *ctx,
 	sleep_time = atoi(optarg);
 }
 
+static void handle_only_the_specified_events(struct common_record_context *ctx,
+					     struct event_list *event)
+{
+	ctx->manual = 1;
+	/* User sets events for profiling */
+	if (!event)
+		ctx->events = 0;
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4692,10 +4701,7 @@ static void parse_record_options(int argc,
 			handle_wakeup_interval_option(ctx, argv);
 			break;
 		case 'S':
-			ctx->manual = 1;
-			/* User sets events for profiling */
-			if (!event)
-				ctx->events = 0;
+			handle_only_the_specified_events(ctx, event);
 			break;
 		case 'r':
 			rt_prio = atoi(optarg);

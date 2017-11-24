@@ -4488,6 +4488,14 @@ static void handle_filter_option(struct event_list *last_event)
 	}
 }
 
+static void handle_trigger_option(struct event_list *event,
+				  struct event_list *last_event)
+{
+	if (!last_event)
+		die("trigger must come after event");
+	add_trigger(event, optarg);
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4534,11 +4542,8 @@ static void parse_record_options(int argc,
 			handle_filter_option(last_event);
 			break;
 		case 'R':
-			if (!last_event)
-				die("trigger must come after event");
-			add_trigger(event, optarg);
+			handle_trigger_option(event, last_event);
 			break;
-
 		case 'F':
 			test_set_event_pid();
 			filter_task = 1;

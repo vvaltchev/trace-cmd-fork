@@ -4469,6 +4469,25 @@ static void handle_event_option(struct common_record_context *ctx,
 		list_event(optarg);
 }
 
+static void handle_filter_option(struct event_list *last_event)
+{
+	if (!last_event)
+		die("filter must come after event");
+	if (last_event->filter) {
+		last_event->filter =
+			realloc(last_event->filter,
+				strlen(last_event->filter) +
+				strlen("&&()") +
+				strlen(optarg) + 1);
+		strcat(last_event->filter, "&&(");
+		strcat(last_event->filter, optarg);
+		strcat(last_event->filter, ")");
+	} else {
+		if (asprintf(&last_event->filter, "(%s)", optarg) < 0)
+			die("Failed to allocate filter %s", optarg);
+	}
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4493,7 +4512,6 @@ static void parse_record_options(int argc,
 
 	for (;;) {
 		int option_index = 0;
-		int ret;
 		int c;
 
 		c = getopt_long(argc-1, argv+1, opts,
@@ -4513,24 +4531,8 @@ static void parse_record_options(int argc,
 			handle_event_option(ctx, &event, &last_event, neg_event);
 			break;
 		case 'f':
-			if (!last_event)
-				die("filter must come after event");
-			if (last_event->filter) {
-				last_event->filter =
-					realloc(last_event->filter,
-						strlen(last_event->filter) +
-						strlen("&&()") +
-						strlen(optarg) + 1);
-				strcat(last_event->filter, "&&(");
-				strcat(last_event->filter, optarg);
-				strcat(last_event->filter, ")");
-			} else {
-				ret = asprintf(&last_event->filter, "(%s)", optarg);
-				if (ret < 0)
-					die("Failed to allocate filter %s", optarg);
-			}
+			handle_filter_option(last_event);
 			break;
-
 		case 'R':
 			if (!last_event)
 				die("trigger must come after event");

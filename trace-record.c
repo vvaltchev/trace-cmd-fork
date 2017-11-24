@@ -4615,6 +4615,14 @@ static void handle_max_bufsize_opt(struct common_record_context *ctx)
 	max_kb = atoi(optarg);
 }
 
+static void handle_use_tcp_option(struct common_record_context *ctx)
+{
+	if (IS_EXTRACT(ctx))
+		ctx->topt = 1; /* Extract top instance also */
+	else
+		use_tcp = 1;
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4734,10 +4742,7 @@ static void parse_record_options(int argc,
 			ctx->instance->cpumask = alloc_mask_from_hex(optarg);
 			break;
 		case 't':
-			if (IS_EXTRACT(ctx))
-				ctx->topt = 1; /* Extract top instance also */
-			else
-				use_tcp = 1;
+			handle_use_tcp_option(ctx);
 			break;
 		case 'b':
 			ctx->instance->buffer_size = atoi(optarg);

@@ -19,8 +19,10 @@
  */
 
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "trace-local.h"
+#include "trace-msg.h"
 
 
 static void dump_file_content(const char *path)
@@ -366,6 +368,30 @@ static void show_plugins(void)
 	pevent_free(pevent);
 }
 
+static void trace_show_guests(void)
+{
+	struct tracecmd_msg_handle *msg_handle;
+	int fd;
+
+	fd = tracecmd_connect_to_socket(TRACE_MRG_SOCK);
+	if (fd < 0) {
+		warning("Can't connect to %s\n", TRACE_MRG_SOCK);
+		goto out;
+	}
+
+	msg_handle = tracecmd_msg_handle_alloc(fd, TRACECMD_MSG_FL_MANAGER);
+
+	if (!msg_handle) {
+		warning("Failed to allocate message handle");
+		goto out;
+	}
+
+	if (tracecmd_msg_list_guests(msg_handle) < 0)
+		warning("Failed listing agents");
+
+ out:
+	close(fd);
+}
 
 void trace_list(int argc, char **argv)
 {
@@ -378,6 +404,7 @@ void trace_list(int argc, char **argv)
 	int plug = 0;
 	int plug_op = 0;
 	int flags = 0;
+	int show_guests = 0;
 	int show_all = 1;
 	int i;
 	const char *arg;
@@ -416,6 +443,10 @@ void trace_list(int argc, char **argv)
 				break;
 			case 'l':
 				flags |= SHOW_EVENT_FILTER;
+				break;
+			case 'G':
+				show_guests = 1;
+				show_all = 0;
 				break;
 			case 'p':
 			case 't':
@@ -477,6 +508,9 @@ void trace_list(int argc, char **argv)
 
 	if (clocks)
 		show_clocks();
+
+	if (show_guests)
+		trace_show_guests();
 
 	if (show_all) {
 		printf("events:\n");

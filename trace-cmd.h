@@ -323,6 +323,7 @@ enum tracecmd_msg_flags {
 enum tracecmd_msg_mngr_type {
 	TRACECMD_MSG_MNG_ERR		= 0,
 	TRACECMD_MSG_MNG_CONNECT	= 1,
+	TRACECMD_MSG_MNG_GLIST		= 2,
 };
 
 /* for both client and server */
@@ -363,7 +364,12 @@ tracecmd_msg_read_manager(struct tracecmd_msg_handle *msg_handle);
 int tracecmd_msg_get_connect(struct tracecmd_msg_handle *msg_handle,
 			     char **domain, char **agent_fifo,
 			     char ***cpu_fifos);
+int tracecmd_msg_send_domain(struct tracecmd_msg_handle *msg_handle,
+			     char *domain, int cpus);
+int tracecmd_msg_send_finish(struct tracecmd_msg_handle *msg_handle);
+
 /* for managers */
+int tracecmd_msg_list_guests(struct tracecmd_msg_handle *msg_handle);
 int tracecmd_msg_connect_guest(struct tracecmd_msg_handle *msg_handle,
 			       const char *domain, const char *agent,
 			       int nr_cpus, char * const *cpu_list);

@@ -1733,6 +1733,17 @@ static int handle_manager(int cfd)
 		}
 
 		break;
+	case TRACECMD_MSG_MNG_GLIST:
+		for (i = 0; i < nr_managers; i++) {
+			ret = tracecmd_msg_send_domain(msg_handle,
+						       managers[i].domain,
+						       managers[i].nr_cpus);
+			if (ret < 0)
+				break;
+		}
+		if (ret >= 0)
+			tracecmd_msg_send_finish(msg_handle);
+		break;
 	default:
 		ret = -EINVAL;
 		break;

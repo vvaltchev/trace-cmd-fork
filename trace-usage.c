@@ -258,6 +258,7 @@ static struct usage_help usage_help[] = {
 		"          -O list plugin options\n"
 		"          -B list defined buffer instances\n"
 		"          -C list the defined clocks (and active one)\n"
+		"          -G list the Guests registered with a local server\n"
 	},
 	{
 		"restore",

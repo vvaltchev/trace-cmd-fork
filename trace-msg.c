@@ -79,6 +79,9 @@ static inline void dprint(const char *fmt, ...)
 #define MIN_CONNECT_SIZE (sizeof(struct tracecmd_msg_header) + \
 			  sizeof(struct tracecmd_msg_connect))
 
+#define MIN_DOMAIN_SIZE (sizeof(struct tracecmd_msg_header) + \
+			 sizeof(struct tracecmd_msg_domain))
+
 /* use CONNECTION_MSG as a protocol version of trace-msg */
 #define MSG_VERSION		"V2"
 #define CONNECTION_MSG		"tracecmd-" MSG_VERSION
@@ -121,6 +124,10 @@ struct tracecmd_msg_connect {
 	be32 cpus;
 } __attribute__((packed));
 
+struct tracecmd_msg_domain {
+	be32 cpus;
+} __attribute__((packed));
+
 struct tracecmd_msg_data {
 	be32 size;
 } __attribute__((packed));
@@ -141,7 +148,10 @@ struct tracecmd_msg_header {
 	C(FINMETA,	7,	0),			\
 	C(CONNECT,	8,	MIN_CONNECT_SIZE),	\
 	C(ACK,		9,	0),			\
-	C(MAX,		10,	-1)
+	C(GLIST,	10,	0),			\
+	C(DOMAIN,	11,	MIN_DOMAIN_SIZE),	\
+	C(FINISH,	12,	0),			\
+	C(MAX,		13,	-1)
 
 #undef C
 #define C(a,b,c)	MSG_##a = b
@@ -182,6 +192,7 @@ struct tracecmd_msg {
 		struct tracecmd_msg_tinit	tinit;
 		struct tracecmd_msg_rinit	rinit;
 		struct tracecmd_msg_connect	connect;
+		struct tracecmd_msg_connect	domain;
 		struct tracecmd_msg_data	data;
 		struct tracecmd_msg_error	err;
 	};
@@ -600,12 +611,15 @@ tracecmd_msg_read_manager(struct tracecmd_msg_handle *msg_handle)
 		goto out;
 
 	cmd = ntohl(msg.hdr.cmd);
-	if (cmd != MSG_CONNECT)
-		goto out;
-
-	msg_handle->cpu_count = ntohl(msg.connect.cpus);
-
-	type = TRACECMD_MSG_MNG_CONNECT;
+	switch (cmd) {
+	case MSG_CONNECT:
+		msg_handle->cpu_count = ntohl(msg.connect.cpus);
+		type = TRACECMD_MSG_MNG_CONNECT;
+		break;
+	case MSG_GLIST:
+		type = TRACECMD_MSG_MNG_GLIST;
+		break;
+	}
  out:
 	return type;
 }
@@ -665,6 +679,52 @@ static int send_string(struct tracecmd_msg_handle *msg_handle,
 	return tracecmd_msg_send(fd, &msg);
 }
 
+int tracecmd_msg_list_guests(struct tracecmd_msg_handle *msg_handle)
+{
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+	char *domain;
+	u32 cmd;
+	int cpus;
+	int ret;
+	int i;
+
+	tracecmd_msg_init(MSG_GLIST, &msg);
+	ret = tracecmd_msg_send(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; ; i++) {
+		ret = tracecmd_msg_recv_wait(fd, &msg);
+		if (ret < 0) {
+			if (ret == -ETIMEDOUT)
+				warning("Connection timed out\n");
+			return ret;
+		}
+
+		cmd = ntohl(msg.hdr.cmd);
+		if (cmd == MSG_FINISH)
+			break;
+
+		if (cmd != MSG_DOMAIN) {
+			warning("Unknown response %d\n", cmd);
+			return -EINVAL;
+		}
+
+		cpus = ntohl(msg.domain.cpus);
+		domain = receive_string(msg_handle);
+		if (!domain)
+			return -EINVAL;
+
+		printf("%s with %d cpus\n", domain, cpus);
+		free(domain);
+	}
+	if (!i)
+		printf("No guests registered\n");
+
+	return 0;
+}
+
 int tracecmd_msg_get_connect(struct tracecmd_msg_handle *msg_handle,
 			     char **domain, char **agent_fifo,
 			     char ***cpu_fifos)
@@ -707,6 +767,31 @@ int tracecmd_msg_get_connect(struct tracecmd_msg_handle *msg_handle,
 			free((*cpu_fifos)[i]);
 	}
 	return -ENOMEM;
+}
+
+int tracecmd_msg_send_domain(struct tracecmd_msg_handle *msg_handle,
+			     char *domain, int cpus)
+{
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+	int ret;
+
+	tracecmd_msg_init(MSG_DOMAIN, &msg);
+	msg.domain.cpus = htonl(cpus);
+	ret = tracecmd_msg_send(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	return send_string(msg_handle, domain);
+}
+
+int tracecmd_msg_send_finish(struct tracecmd_msg_handle *msg_handle)
+{
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+
+	tracecmd_msg_init(MSG_FINISH, &msg);
+	return tracecmd_msg_send(fd, &msg);
 }
 
 int tracecmd_msg_connect_guest(struct tracecmd_msg_handle *msg_handle,

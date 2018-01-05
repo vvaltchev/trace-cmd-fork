@@ -26,6 +26,19 @@
 #include "trace-cmd.h"
 #include "event-utils.h"
 
+#define _VAR_DIR_Q(dir)		#dir
+#define VAR_DIR_Q(dir)		_VAR_DIR_Q(dir)
+
+#define VAR_RUN_DIR		"/var/run"
+#define VAR_LIB_DIR		VAR_DIR_Q(VAR_DIR) "/lib"
+#define TRACE_CMD_DIR		VAR_LIB_DIR "/trace-cmd/"
+#define TRACE_CMD_RUN_DIR	VAR_RUN_DIR "/trace-cmd/"
+#define VIRT_DIR		TRACE_CMD_DIR "virt/"
+#define VIRT_TRACE_CTL_SOCK	TRACE_CMD_RUN_DIR "agent-ctl-path"
+#define VIRT_DOMAIN_DIR		VIRT_DIR "%s/"
+#define TRACE_PATH_DOMAIN_CPU_O	VIRT_DOMAIN_DIR "trace-path-cpu%d.out"
+#define TRACE_PATH_DOMAIN_CPU_I	VIRT_DOMAIN_DIR "trace-path-cpu%d.in"
+
 extern int debug;
 extern int quiet;
 

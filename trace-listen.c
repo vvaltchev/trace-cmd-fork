@@ -1219,6 +1219,9 @@ static void reset_client(struct client_list *client)
 {
 	const char *name;
 
+	if (!client)
+		return;
+
 	name = client->name ? client->name : "client";
 	plog("Closing %s:%d\n", name, client->pid);
 	free(client->name);

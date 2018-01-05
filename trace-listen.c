@@ -1294,58 +1294,81 @@ update_client(struct client_list *client, char *domain, int virtpid)
 	client->pid = virtpid;
 }
 
-static int get_new_fd(void)
+static int get_new_item(void **items, int item_size, int *free_items,
+			int *nr_items, int start_idx, int is_free_item(void *))
 {
 	void *new;
 	int idx;
 
-	if (free_fds) {
-		for (idx = FD_CONNECTED; idx < nr_fds; idx++)
-			if (fds[idx].fd < 0)
+	if (*free_items) {
+		for (idx = start_idx; idx < *nr_items; idx++)
+			if (is_free_item((*items) + (item_size * idx)))
 				break;
-		if (idx == nr_fds) {
-			warning("Could not find free file descriptor");
-			free_fds = 0;
+		if (idx == *nr_items) {
+			*free_items = 0;
+			return -EAGAIN;
 		} else
-			free_fds--;
+			(*free_items)--;
 	} else
-		idx = nr_fds;
+		idx = *nr_items;
 
-	if (idx == nr_fds) {
-		new = realloc(fds, sizeof(*fds) * (nr_fds + 1));
+	if (idx == *nr_items) {
+		new = realloc(*items, item_size * ((*nr_items) + 1));
 		if (!new)
-			return -1;
-		fds = new;
-		nr_fds++;
+			return -ENOMEM;
+		*items = new;
+		(*nr_items)++;
 	}
 
-	memset(&fds[idx], 0, sizeof(*fds));
+	memset((*items) + (item_size * idx), 0, item_size);
+
 	return idx;
+}
+
+static int is_free_fd(void *item)
+{
+	struct pollfd *fds = item;
+
+	return fds->fd < 0;
+}
+
+static int get_new_fd(void)
+{
+	int idx;
+
+ again:
+	idx = get_new_item((void **)&fds, sizeof(*fds), &free_fds, &nr_fds,
+			   FD_CONNECTED, is_free_fd);
+	if (idx < 0) {
+		if (idx == -EAGAIN) {
+			warning("Could not find free file descriptor");
+			goto again;
+		}
+	}
+	return idx;
+}
+
+static int is_free_client(void *item)
+{
+	struct client_list *client = item;
+
+	return !client->pid;
 }
 
 static struct client_list *get_new_client(int fd_idx)
 {
 	struct client_list *client;
-	void *new;
 	int idx;
 
-	if (free_clients) {
-		for (idx = 0; idx < nr_clients; idx++)
-			if (!clients[idx].pid)
-				break;
-		if (idx == nr_clients) {
+ again:
+	idx = get_new_item((void **)&clients, sizeof(*clients), &free_clients,
+			   &nr_clients, 0, is_free_client);
+	if (idx < 0) {
+		if (idx == -EAGAIN) {
 			warning("could not find free client");
-			free_clients = 0;
+			goto again;
 		}
-	} else
-		idx = nr_clients;
-
-	if (idx == nr_clients) {
-		new = realloc(clients, sizeof(*clients) * (nr_clients + 1));
-		if (!new)
-			return NULL;
-		clients = new;
-		idx = nr_clients++;
+		return NULL;
 	}
 
 	client = &clients[idx];

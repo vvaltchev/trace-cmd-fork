@@ -1526,6 +1526,8 @@ static void guest_listener(struct manager_list *mgr)
 	for (;;) {
 		ret = poll(fds, 2, -1);
 		if (ret < 0) {
+			if (errno == EINTR)
+				break;
 			perror("poll");
 			exit(-1);
 		}

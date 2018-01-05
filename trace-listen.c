@@ -1253,11 +1253,36 @@ static void reset_client(struct client_list *client)
 	free_clients++;
 }
 
+static void reset_manager(struct manager_list *mgr)
+{
+	int i;
+
+	free(mgr->domain);
+	free(mgr->agent_file.in);
+	free(mgr->agent_file.out);
+	for (i = 0; i < mgr->nr_cpus; i++) {
+		free(mgr->cpu_files[i].in);
+		free(mgr->cpu_files[i].out);
+	}
+	free(mgr->cpu_files);
+	memset(mgr, 0, sizeof(*mgr));
+	free_managers++;
+}
+
 static void remove_process(int pid, int status)
 {
 	struct client_list *client;
 	int idx;
 	int i;
+
+	for (i = 0; i < nr_managers; i++) {
+		if (managers[i].pid == pid)
+			break;
+	}
+	if (i != nr_pids) {
+		reset_manager(&managers[i]);
+		return;
+	}
 
 	for (i = 0; i < nr_pids; i++) {
 		if (client_pids[i].pid == pid)
@@ -1634,13 +1659,13 @@ add_domain(const char *domain, const char *agent_fifo,
 
 	ret = -ENOMEM;
 
+	mgr->nr_cpus = nr_cpus;
+
 	mgr->cpu_files = calloc(nr_cpus, sizeof(*mgr->cpu_files));
 	if (!mgr->cpu_files) {
 		plog("Failed to allocate manager cpu files\n");
 		goto free;
 	}
-
-	mgr->nr_cpus = nr_cpus;
 
 	for (i = 0; i < nr_cpus; i++) {
 		ret = setup_fifo(cpu_fifos[i], &mgr->cpu_files[i]);
@@ -1663,15 +1688,7 @@ add_domain(const char *domain, const char *agent_fifo,
 	exit(0);
 
  free:
-	free(mgr->agent_file.in);
-	free(mgr->agent_file.out);
-	for (i = 0; i < nr_cpus; i++) {
-		free(mgr->cpu_files[i].in);
-		free(mgr->cpu_files[i].out);
-	}
-	free(mgr->cpu_files);
-	memset(mgr, 0, sizeof(*mgr));
-	free_managers++;
+	reset_manager(mgr);
 	return NULL;
 }
 

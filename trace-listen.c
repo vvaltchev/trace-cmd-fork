@@ -1627,6 +1627,17 @@ add_domain(const char *domain, const char *agent_fifo,
 		return NULL;
 	}
 
+	/*
+	 * Make sure that this domain does not exist yet.
+	 * TODO: Allow updating of active domain listeners.
+	 */
+	for (i = 0; i < nr_managers; i++) {
+		if (strcmp(managers[i].domain, domain) == 0) {
+			plog("Domain %s is already registered\n", domain);
+			return NULL;
+		}
+	}
+
 	mgr = get_new_manager();
 	if (!mgr) {
 		plog("Failed to allocate manager descriptor\n");

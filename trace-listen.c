@@ -1009,6 +1009,23 @@ static int get_cmd_arg(int fd, char *buf, int size)
 	return 0;
 }
 
+struct fifo_files {
+	char			*in;
+	char			*out;
+};
+
+struct manager_list {
+	char			*domain;
+	struct fifo_files	agent_file;
+	struct fifo_files	*cpu_files;
+	int			nr_cpus;
+	int			pid;
+};
+
+static struct manager_list *managers;
+static int free_managers;
+static int nr_managers;
+
 /* We can convert pid to domain name of a guest when we use qemu. */
 static char *get_guest_domain_from_pid(int pid)
 {
@@ -1018,10 +1035,23 @@ static char *get_guest_domain_from_pid(int pid)
 	char *eq, *comma;
 	int fd;
 	int r;
+	int i;
 
 	/*
-	 * We have the pid, now look at the cmdline to find
-	 * the --name option.
+	 * We have the pid, first check if there's a listener
+	 * that is for it.
+	 */
+	for (i = 0; i < nr_managers; i++) {
+		if (managers[i].pid == pid)
+			break;
+	}
+	if (i < nr_managers)
+		return managers[i].domain;
+
+	/*
+	 * There's not a listener, so we need to see if we can
+	 * find a qemu instance that is running this.
+	 * Search if the pid has a "--name" option.
 	 */
 	snprintf(path, PATH_MAX, "/proc/%d/cmdline", pid);
 	fd = open(path, O_RDONLY);
@@ -1112,7 +1142,13 @@ static int do_connection(int cfd, struct sockaddr *peer_addr,
 enum {
 	FD_NET		= 0,
 	FD_VIRT		= 1,
+	FD_MNGR		= 2,
 	FD_CONNECTED,
+};
+
+enum client_type {
+	CLIENT_NORM	= 1,
+	CLIENT_AGENT	= 2,
 };
 
 struct client_pid_list {
@@ -1124,6 +1160,7 @@ struct client_list {
 	char			*name;
 	int			pid;
 	int			fd_idx;
+	enum client_type	type;
 };
 
 static struct client_pid_list *client_pids;
@@ -1279,6 +1316,7 @@ update_client(struct client_list *client, char *domain, int virtpid)
 {
 	client->name = domain;
 	client->pid = virtpid;
+	client->type = CLIENT_NORM;
 }
 
 static int get_new_item(void **items, int item_size, int *free_items,
@@ -1364,7 +1402,329 @@ static struct client_list *get_new_client(int fd_idx)
 	return client;
 }
 
-static void do_accept_loop(int nfd, int vfd)
+static int is_free_manager(void *item)
+{
+	struct manager_list *mgr = item;
+
+	return !mgr->domain;
+}
+
+static struct manager_list *get_new_manager(void)
+{
+	struct manager_list *mgr;
+	int idx;
+
+ again:
+	idx = get_new_item((void **)&managers, sizeof(*managers), &free_managers,
+			   &nr_managers, 0, is_free_manager);
+	if (idx < 0) {
+		if (idx == -EAGAIN) {
+			warning("could not find free manager");
+			goto again;
+		}
+		return NULL;
+	}
+
+	mgr = &managers[idx];
+
+	return mgr;
+}
+
+static int create_socket(struct sockaddr_un *un_server,
+			 const char *file)
+{
+	int sfd;
+
+	sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (sfd < 0)
+		return sfd;
+
+	un_server->sun_family = AF_UNIX;
+	snprintf(un_server->sun_path, strlen(file)+1, file);
+
+	return sfd;
+}
+
+int tracecmd_connect_to_socket(char *agent)
+{
+	struct sockaddr_un un_server;
+	socklen_t slen;
+	int sfd;
+	int ret;
+
+	sfd = create_socket(&un_server, agent);
+	if (sfd < 0)
+		return -1;
+
+	slen = sizeof(un_server);
+	ret = connect(sfd, (struct sockaddr *)&un_server, slen);
+	if (ret < 0) {
+		fprintf(stderr, "Can not connect to socket %s", agent);
+		return -1;
+	}
+
+	return sfd;
+}
+
+/*
+ * The guest_listener() is a process that will connect to the guest
+ * FIFOs and pass any information from the guest to the host.
+ * Ideally, we wouldn't need this and just connect to the client
+ * directly. But because the server requiers a socket type connection
+ * and the guest only supplies two FIFOs, we need this intermediary
+ * to provide the two way communication between a single socket and
+ * the two FIFOs.
+ */
+static void guest_listener(struct manager_list *mgr)
+{
+	struct pollfd fds[2];
+	char buf[BUFSIZ];
+	int afd, gin, gout;
+	int ret;
+
+	gin = open(mgr->agent_file.in, O_WRONLY);
+	if (gin < 0) {
+		perror(mgr->agent_file.in);
+		exit(-1);
+	}
+
+	gout = open(mgr->agent_file.out, O_RDONLY);
+	if (gout < 0) {
+		perror(mgr->agent_file.out);
+		exit(-1);
+	}
+
+	afd = tracecmd_connect_to_socket(VIRT_TRACE_CTL_SOCK);
+	if (afd < 0) {
+		perror(VIRT_TRACE_CTL_SOCK);
+		exit(-1);
+	}
+
+	memset(&fds[0], 0, sizeof(fds));
+
+	fds[0].fd = afd;
+	fds[0].events = POLLIN;
+
+	fds[1].fd = gout;
+	fds[1].events = POLLIN;
+
+	for (;;) {
+		ret = poll(fds, 2, -1);
+		if (ret < 0) {
+			perror("poll");
+			exit(-1);
+		}
+
+		if (fds[0].revents & POLLIN) {
+			ret = read(afd, buf, BUFSIZ);
+			if (ret == 0)
+				break;
+			if (ret < 0) {
+				perror("read agent");
+				exit(-1);
+			}
+			ret = write(gin, buf, ret);
+			if (ret < 0) {
+				perror("write guest");
+				exit(-1);
+			}
+		}
+
+		if (fds[1].revents & POLLIN) {
+			ret = read(gout, buf, BUFSIZ);
+			if (ret < 0) {
+				perror("read guest");
+				exit(-1);
+			}
+			if (ret == 0)
+				break;
+			ret = write(afd, buf, ret);
+			if (ret < 0) {
+				perror("write agent");
+				exit(-1);
+			}
+		}
+	}
+}
+
+int setup_fifo(const char *name, struct fifo_files *files)
+{
+	struct stat st;
+	int ret;
+
+	ret = asprintf(&files->in, "%s.in", name);
+	if (ret < 0) {
+		plog("Error: creating path to %s.in\n", name);
+		return ret;
+	}
+
+
+	ret = asprintf(&files->out, "%s.out", name);
+	if (ret < 0) {
+		plog("Error: creating path to %s.out\n", name);
+		return ret;
+	}
+
+	ret = stat(files->in, &st);
+	if (ret < 0) {
+		plog("Error: %s not found\n", files->in);
+		goto free;
+	}
+
+	if (!S_ISFIFO(st.st_mode)) {
+		plog("Error: %s not a FIFO\n", files->in);
+		goto free;
+	}
+
+	ret = stat(files->out, &st);
+	if (ret < 0) {
+		plog("Error: %s not found\n", files->out);
+		goto free;
+	}
+
+	if (!S_ISFIFO(st.st_mode)) {
+		plog("Error: %s not a FIFO\n", files->out);
+		goto free;
+	}
+
+	return 0;
+
+ free:
+	free(files->out);
+	free(files->in);
+	files->out = NULL;
+	files->in = NULL;
+	return -EINVAL;
+}
+
+static struct manager_list *
+add_domain(const char *domain, const char *agent_fifo,
+	   char * const *cpu_fifos)
+{
+	struct manager_list *mgr;
+	int nr_cpus;
+	int *pid;
+	int ret;
+	int i;
+
+	if (!domain || !agent_fifo || !cpu_fifos) {
+		plog("Failed to received domain, agent fifo, or cpu fifos\n");
+		return NULL;
+	}
+
+	mgr = get_new_manager();
+	if (!mgr) {
+		plog("Failed to allocate manager descriptor\n");
+		return NULL;
+	}
+
+	pid = &mgr->pid;
+	mgr->domain = strdup(domain);
+	if (!mgr->domain) {
+		plog("Failed to allocate manager domain name\n");
+		return NULL;
+	}
+
+	ret = setup_fifo(agent_fifo, &mgr->agent_file);
+	if (ret < 0)
+		goto free;
+
+	for (nr_cpus = 0; cpu_fifos[nr_cpus]; nr_cpus++)
+		;
+
+	ret = -ENOMEM;
+
+	mgr->cpu_files = calloc(nr_cpus, sizeof(*mgr->cpu_files));
+	if (!mgr->cpu_files) {
+		plog("Failed to allocate manager cpu files\n");
+		goto free;
+	}
+
+	mgr->nr_cpus = nr_cpus;
+
+	for (i = 0; i < nr_cpus; i++) {
+		ret = setup_fifo(cpu_fifos[i], &mgr->cpu_files[i]);
+		if (ret < 0)
+			goto free;
+	}
+
+	*pid = fork();
+	if (*pid < 0) {
+		ret = *pid;
+		plog("Failed to fork\n");
+		goto free;
+	}
+
+	if (*pid)
+		return mgr;
+
+	guest_listener(mgr);
+
+	exit(0);
+
+ free:
+	free(mgr->agent_file.in);
+	free(mgr->agent_file.out);
+	for (i = 0; i < nr_cpus; i++) {
+		free(mgr->cpu_files[i].in);
+		free(mgr->cpu_files[i].out);
+	}
+	free(mgr->cpu_files);
+	memset(mgr, 0, sizeof(*mgr));
+	free_managers++;
+	return NULL;
+}
+
+static int handle_manager(int cfd)
+{
+	struct tracecmd_msg_handle *msg_handle;
+	enum tracecmd_msg_mngr_type type;
+	struct manager_list *mgr;
+	char *domain;
+	char *agent_fifo;
+	char **cpu_fifos;
+	int ret;
+	int i;
+
+	msg_handle = tracecmd_msg_handle_alloc(cfd, TRACECMD_MSG_FL_SERVER);
+	if (!msg_handle) {
+		ret = -ENOMEM;
+		plog("Failed to allocate msg_handle\n");
+		goto out;
+	}
+
+	type = tracecmd_msg_read_manager(msg_handle);
+
+	switch (type) {
+	case TRACECMD_MSG_MNG_CONNECT:
+		ret = tracecmd_msg_get_connect(msg_handle, &domain,
+					       &agent_fifo, &cpu_fifos);
+		if (ret < 0)
+			break;
+
+		mgr = add_domain(domain, agent_fifo, cpu_fifos);
+
+		if (!mgr) {
+			free(domain);
+			free(agent_fifo);
+			for (i = 0; cpu_fifos && cpu_fifos[i]; i++)
+				free(cpu_fifos[i]);
+			free(cpu_fifos);
+		}
+
+		break;
+	default:
+		ret = -EINVAL;
+		break;
+	}
+
+ out:
+	tracecmd_msg_handle_close(msg_handle);
+
+	return ret;
+}
+
+static void do_accept_loop(int nfd, int vfd, int mfd)
 {
 	struct client_list *client;
 	struct sockaddr addr;
@@ -1390,6 +1750,10 @@ static void do_accept_loop(int nfd, int vfd)
 	fds[FD_VIRT].fd = vfd;
 	if (vfd >= 0)
 		fds[FD_VIRT].events = POLLIN;
+
+	fds[FD_MNGR].fd = mfd;
+	if (mfd >= 0)
+		fds[FD_MNGR].events = POLLIN;
 
 	do {
 		/* If there are active threads, then timeout to
@@ -1487,6 +1851,10 @@ static void do_accept_loop(int nfd, int vfd)
 					fds[idx].fd = cfd;
 					fds[idx].events = POLLIN | POLLHUP;
 
+					continue;
+
+				} else if (i == FD_MNGR) {
+					handle_manager(cfd);
 					continue;
 
 				} else {
@@ -1695,12 +2063,14 @@ static void make_virt_if_dir(void)
 
 static void remove_sock(void)
 {
-	if (unlink_sock)
+	if (unlink_sock) {
 		unlink(VIRT_TRACE_CTL_SOCK);
+		unlink(TRACE_MRG_SOCK);
+	}
 	unlink_sock = 0;
 }
 
-static int set_up_virt(void)
+static int set_up_socket(const char *file)
 {
 	struct sockaddr_un un_server;
 	struct group *group;
@@ -1715,16 +2085,16 @@ static int set_up_virt(void)
 		pdie("socket");
 
 	un_server.sun_family = AF_UNIX;
-	snprintf(un_server.sun_path, PATH_MAX, VIRT_TRACE_CTL_SOCK);
+	snprintf(un_server.sun_path, PATH_MAX, file);
 
 	if (bind(sfd, (struct sockaddr *)&un_server, slen) < 0)
 		pdie("bind");
 	unlink_sock = 1;
 
-	chmod(VIRT_TRACE_CTL_SOCK, 0660);
+	chmod(file, 0660);
 	group = getgrnam("qemu");
-	if (chown(VIRT_TRACE_CTL_SOCK, -1, group->gr_gid) < 0)
-		pdie("fchown %s", VIRT_TRACE_CTL_SOCK);
+	if (chown(file, -1, group->gr_gid) < 0)
+		pdie("fchown %s", file);
 
 	if (listen(sfd, backlog) < 0)
 		pdie("listen");
@@ -1732,9 +2102,19 @@ static int set_up_virt(void)
 	return sfd;
 }
 
-static void do_listen(int nfd, int vfd)
+static int set_up_virt(void)
 {
-	do_accept_loop(nfd, vfd);
+	return set_up_socket(VIRT_TRACE_CTL_SOCK);
+}
+
+static int set_up_manager(void)
+{
+	return set_up_socket(TRACE_MRG_SOCK);
+}
+
+static void do_listen(int nfd, int vfd, int mfd)
+{
+	do_accept_loop(nfd, vfd, mfd);
 
 	remove_sock();
 
@@ -1775,6 +2155,7 @@ void trace_listen(int argc, char **argv)
 	int virt = 0;
 	int nfd = -1;
 	int vfd = -1;
+	int mfd = -1;
 	int c;
 
 	if (argc < 2)
@@ -1893,9 +2274,14 @@ void trace_listen(int argc, char **argv)
 	if (virt) {
 		atexit(remove_sock);
 		vfd = set_up_virt();
+		if (vfd < 0)
+			die("Setting up agent socket");
+		mfd = set_up_manager();
+		if (mfd < 0)
+			die("Setting up manager socket");
 	}
 
-	do_listen(nfd, vfd);
+	do_listen(nfd, vfd, mfd);
 
 	return;
 }

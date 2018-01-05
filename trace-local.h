@@ -35,9 +35,12 @@
 #define TRACE_CMD_RUN_DIR	VAR_RUN_DIR "/trace-cmd/"
 #define VIRT_DIR		TRACE_CMD_DIR "virt/"
 #define VIRT_TRACE_CTL_SOCK	TRACE_CMD_RUN_DIR "agent-ctl-path"
+#define TRACE_MRG_SOCK		TRACE_CMD_RUN_DIR "manager-ctl-path"
 #define VIRT_DOMAIN_DIR		VIRT_DIR "%s/"
-#define TRACE_PATH_DOMAIN_CPU_O	VIRT_DOMAIN_DIR "trace-path-cpu%d.out"
-#define TRACE_PATH_DOMAIN_CPU_I	VIRT_DOMAIN_DIR "trace-path-cpu%d.in"
+#define VIRT_TRACE_CTL_FIFO	VIRT_DOMAIN_DIR "agent-ctl-path"
+#define TRACE_PATH_DOMAIN_CPU	VIRT_DOMAIN_DIR "trace-path-cpu%d"
+#define TRACE_PATH_DOMAIN_CPU_O	TRACE_PATH_DOMAIN_CPU ".out"
+#define TRACE_PATH_DOMAIN_CPU_I	TRACE_PATH_DOMAIN_CPU ".in"
 
 extern int debug;
 extern int quiet;
@@ -90,6 +93,8 @@ void trace_report(int argc, char **argv);
 void trace_split(int argc, char **argv);
 
 void trace_listen(int argc, char **argv);
+
+void trace_connect(int argc, char **argv);
 
 void trace_restore(int argc, char **argv);
 

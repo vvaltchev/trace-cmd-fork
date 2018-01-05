@@ -293,6 +293,22 @@ static struct usage_help usage_help[] = {
 		"          -N do not load any plugins\n"
 	},
 	{
+		"connect",
+		"connect a guest to a listener",
+		" %s connect [-f][-a agent_path] [-c cpu_count][-C cpu_path,cpu_path,..] domain\n"
+		"          -a Define the path and file of where the domain agent FIFO exists\n"
+		"             Do not include the '.in' or '.out' portion of the file\n"
+		"             By default it will look at /var/lib/trace-cmd/virt/<domain>/agent-ctl-path\n"
+		"          -c Specify the number of CPUs to connect to.\n"
+		"             Must be less than the number of CPU FIFOs that exist.\n"
+		"             Will ignore any CPU FIFOs that is more than this number.\n"
+		"          -C Specify the path and file of the CPU FIFOs. For more than\n"
+		"             one CPU, comma separate them.\n"
+		"          -f Create the FIFOs if they do not exist before connecting.\n"
+		"          -p permission to set the FIFOs at\n"
+		"          -g the group ownership to set it to\n"
+	},
+	{
 		NULL, NULL, NULL
 	}
 };

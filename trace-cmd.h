@@ -308,6 +308,7 @@ enum tracecmd_msg_bits {
 	TRACECMD_MSG_BIT_USE_TCP	= 2,
 	TRACECMD_MSG_BIT_NETWORK	= 3,
 	TRACECMD_MSG_BIT_VIRT		= 4,
+	TRACECMD_MSG_BIT_MANAGER	= 5,
 };
 
 enum tracecmd_msg_flags {
@@ -316,6 +317,12 @@ enum tracecmd_msg_flags {
 	TRACECMD_MSG_FL_USE_TCP		= (1 << TRACECMD_MSG_BIT_USE_TCP),
 	TRACECMD_MSG_FL_NETWORK		= (1 << TRACECMD_MSG_BIT_NETWORK),
 	TRACECMD_MSG_FL_VIRT		= (1 << TRACECMD_MSG_BIT_VIRT),
+	TRACECMD_MSG_FL_MANAGER		= (1 << TRACECMD_MSG_BIT_MANAGER),
+};
+
+enum tracecmd_msg_mngr_type {
+	TRACECMD_MSG_MNG_ERR		= 0,
+	TRACECMD_MSG_MNG_CONNECT	= 1,
 };
 
 /* for both client and server */
@@ -340,6 +347,7 @@ int tracecmd_msg_metadata_send(struct tracecmd_msg_handle *msg_handle,
 			       const char *buf, int size);
 int tracecmd_msg_finish_sending_metadata(struct tracecmd_msg_handle *msg_handle);
 void tracecmd_msg_send_close_msg(struct tracecmd_msg_handle *msg_handle);
+int tracecmd_connect_to_socket(char *agent);
 
 /* for server */
 int tracecmd_msg_set_connection(struct tracecmd_msg_handle *msg_handle,
@@ -350,6 +358,16 @@ int tracecmd_msg_send_port_array(struct tracecmd_msg_handle *msg_handle,
 int tracecmd_msg_collect_metadata(struct tracecmd_msg_handle *msg_handle, int ofd);
 bool tracecmd_msg_done(struct tracecmd_msg_handle *msg_handle);
 void tracecmd_msg_set_done(struct tracecmd_msg_handle *msg_handle);
+enum tracecmd_msg_mngr_type
+tracecmd_msg_read_manager(struct tracecmd_msg_handle *msg_handle);
+int tracecmd_msg_get_connect(struct tracecmd_msg_handle *msg_handle,
+			     char **domain, char **agent_fifo,
+			     char ***cpu_fifos);
+/* for managers */
+int tracecmd_msg_connect_guest(struct tracecmd_msg_handle *msg_handle,
+			       const char *domain, const char *agent,
+			       int nr_cpus, char * const *cpu_list);
+
 
 /* --- Plugin handling --- */
 extern struct pevent_plugin_option trace_ftrace_options[];

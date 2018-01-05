@@ -76,6 +76,9 @@ static inline void dprint(const char *fmt, ...)
 #define MIN_DATA_SIZE	(sizeof(struct tracecmd_msg_header) + \
 			 sizeof(struct tracecmd_msg_data))
 
+#define MIN_CONNECT_SIZE (sizeof(struct tracecmd_msg_header) + \
+			  sizeof(struct tracecmd_msg_connect))
+
 /* use CONNECTION_MSG as a protocol version of trace-msg */
 #define MSG_VERSION		"V2"
 #define CONNECTION_MSG		"tracecmd-" MSG_VERSION
@@ -114,6 +117,10 @@ struct tracecmd_msg_rinit {
 	be32 cpus;
 } __attribute__((packed));
 
+struct tracecmd_msg_connect {
+	be32 cpus;
+} __attribute__((packed));
+
 struct tracecmd_msg_data {
 	be32 size;
 } __attribute__((packed));
@@ -132,7 +139,9 @@ struct tracecmd_msg_header {
 	C(RINIT,	5,	MIN_RINIT_SIZE),	\
 	C(SENDMETA,	6,	MIN_DATA_SIZE),		\
 	C(FINMETA,	7,	0),			\
-	C(MAX,		8,	-1)
+	C(CONNECT,	8,	MIN_CONNECT_SIZE),	\
+	C(ACK,		9,	0),			\
+	C(MAX,		10,	-1)
 
 #undef C
 #define C(a,b,c)	MSG_##a = b
@@ -172,6 +181,7 @@ struct tracecmd_msg {
 	union {
 		struct tracecmd_msg_tinit	tinit;
 		struct tracecmd_msg_rinit	rinit;
+		struct tracecmd_msg_connect	connect;
 		struct tracecmd_msg_data	data;
 		struct tracecmd_msg_error	err;
 	};
@@ -576,6 +586,172 @@ error:
 	return ret;
 }
 
+enum tracecmd_msg_mngr_type
+tracecmd_msg_read_manager(struct tracecmd_msg_handle *msg_handle)
+{
+	enum tracecmd_msg_mngr_type type = TRACECMD_MSG_MNG_ERR;
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+	u32 cmd;
+	int ret;
+
+	ret = tracecmd_msg_recv_wait(fd, &msg);
+	if (ret < 0)
+		goto out;
+
+	cmd = ntohl(msg.hdr.cmd);
+	if (cmd != MSG_CONNECT)
+		goto out;
+
+	msg_handle->cpu_count = ntohl(msg.connect.cpus);
+
+	type = TRACECMD_MSG_MNG_CONNECT;
+ out:
+	return type;
+}
+
+static char *receive_string(struct tracecmd_msg_handle *msg_handle)
+{
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+	char *str = NULL;
+	char *new;
+	int size;
+	int len = 0;
+	int ret;
+
+	for (;;) {
+		ret = tracecmd_msg_recv_wait(fd, &msg);
+		if (ret < 0)
+			return NULL;
+		if (ntohl(msg.hdr.cmd) == MSG_FINMETA)
+			break;
+
+		if (ntohl(msg.hdr.cmd) != MSG_SENDMETA) {
+			free(str);
+			return NULL;
+		}
+
+		size = ntohl(msg.data.size);
+		new = realloc(str, len + size + 1);
+		if (!new) {
+			free(str);
+			return NULL;
+		}
+		str = new;
+		memcpy(str + len, msg.buf, size);
+		len += size;
+	}
+
+	if (str)
+		str[len] = 0;
+
+	return str;
+}
+
+static int send_string(struct tracecmd_msg_handle *msg_handle,
+		       const char *str)
+{
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+	int len = strlen(str);
+	int ret;
+
+	ret = tracecmd_msg_metadata_send(msg_handle, str, len);
+	if (ret < 0)
+		return ret;
+
+	tracecmd_msg_init(MSG_FINMETA, &msg);
+	return tracecmd_msg_send(fd, &msg);
+}
+
+int tracecmd_msg_get_connect(struct tracecmd_msg_handle *msg_handle,
+			     char **domain, char **agent_fifo,
+			     char ***cpu_fifos)
+{
+	struct tracecmd_msg msg;
+	char *str;
+	int fd = msg_handle->fd;
+	int ret;
+	int i;
+
+	tracecmd_msg_init(MSG_ACK, &msg);
+	ret = tracecmd_msg_send(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	*domain = receive_string(msg_handle);
+	if (!domain)
+		return -EINVAL;
+
+	*agent_fifo = receive_string(msg_handle);
+	if (!agent_fifo)
+		return -EINVAL;
+
+	*cpu_fifos = calloc(msg_handle->cpu_count, sizeof(**cpu_fifos));
+	if (!*cpu_fifos)
+		goto free;
+
+	for (i = 0; i < msg_handle->cpu_count; i++) {
+		str = receive_string(msg_handle);
+		if (!str)
+			goto free;
+		(*cpu_fifos)[i] = str;
+	}
+
+	return 0;
+ free:
+	free(*agent_fifo);
+	if (*cpu_fifos) {
+		for (i = 0; i < msg_handle->cpu_count; i++)
+			free((*cpu_fifos)[i]);
+	}
+	return -ENOMEM;
+}
+
+int tracecmd_msg_connect_guest(struct tracecmd_msg_handle *msg_handle,
+			       const char *domain, const char *agent,
+			       int nr_cpus, char * const *cpu_list)
+{
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+	int i;
+	int ret;
+
+	tracecmd_msg_init(MSG_CONNECT, &msg);
+	msg.connect.cpus = htonl(nr_cpus);
+	ret = tracecmd_msg_send(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	ret = tracecmd_msg_recv_wait(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	if (ntohl(msg.hdr.cmd) != MSG_ACK)
+		return -1;
+
+	/*
+	 * Now it is expecting the following strings:
+	 *  domain, agent
+	 * followed by a list of cpu paths (nr_cpus amount)
+	 */
+	ret = send_string(msg_handle, domain);
+	if (ret < 0)
+		return ret;
+	ret = send_string(msg_handle, agent);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i < nr_cpus; i++) {
+		ret = send_string(msg_handle, cpu_list[i]);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
 static bool process_option(struct tracecmd_msg_handle *msg_handle,
 			   struct tracecmd_msg_opt *opt)
 {
@@ -697,6 +873,7 @@ int tracecmd_msg_initial_setting(struct tracecmd_msg_handle *msg_handle)
 	}
 
 	cmd = ntohl(msg.hdr.cmd);
+
 	if (cmd != MSG_TINIT) {
 		ret = -EINVAL;
 		goto error;

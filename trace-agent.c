@@ -41,7 +41,7 @@ static struct tracecmd_msg_handle *setup_network(const char *host)
 }
 
 static struct tracecmd_msg_handle *
-communicate_with_listener_virt_agent(int fd)
+communicate_with_listener_virt_agent(int fd, int cpu_count)
 {
 	struct tracecmd_msg_handle *msg_handle;
 
@@ -55,21 +55,42 @@ communicate_with_listener_virt_agent(int fd)
 	if (tracecmd_msg_connect_to_server(msg_handle) < 0)
 		die("Cannot communicate with server");
 
-	if (tracecmd_msg_agent_connect(msg_handle) < 0)
+	if (tracecmd_msg_agent_connect(msg_handle, cpu_count) < 0)
 		die("Cannot connect to server");
 
 	return msg_handle;
 }
 
-static struct tracecmd_msg_handle *setup_virtio(void)
+static int test_cpu_devices(int cpu_count)
+{
+	struct stat st;
+	char buf[PATH_MAX + 1];
+	int ret;
+	int i;
+
+	for (i = 0; i < cpu_count; i++) {
+		snprintf(buf, PATH_MAX, TRACE_PATH_CPU, i);
+		buf[PATH_MAX] = 0;
+		ret = stat(buf, &st);
+		if (ret < 0 || !S_ISCHR(st.st_mode))
+			break;
+	}
+	return i;
+}
+
+static struct tracecmd_msg_handle *setup_virtio(int cpu_count)
 {
 	int fd;
+
+	cpu_count = test_cpu_devices(cpu_count);
+	if (!cpu_count)
+		die("No CPU devices found");
 
 	fd = open(AGENT_CTL_PATH, O_RDWR);
 	if (fd < 0)
 		die("Cannot open %s", AGENT_CTL_PATH);
 
-	return communicate_with_listener_virt_agent(fd);
+	return communicate_with_listener_virt_agent(fd, cpu_count);
 }
 
 enum {
@@ -81,6 +102,7 @@ void trace_agent(int argc, char **argv)
 {
 	struct tracecmd_msg_handle *msg_handle;
 	char *host = NULL;
+	int cpu_count;
 	int c;
 
 	for (;;) {
@@ -124,10 +146,12 @@ void trace_agent(int argc, char **argv)
 		usage(argv);
 	}
 
+	cpu_count = count_cpus();
+
 	if (host)
 		msg_handle = setup_network(host);
 	else
-		msg_handle = setup_virtio();
+		msg_handle = setup_virtio(cpu_count);
 
 	if (!msg_handle)
 		exit(-1);

@@ -1092,7 +1092,7 @@ static char *get_guest_domain_from_pid(int pid)
 
 static int do_connection(int cfd, struct sockaddr *peer_addr,
 			 socklen_t peer_addr_len, const char *domain,
-			 int virtpid, int mode)
+			 int virtpid, int mode, int *cpu_count)
 {
 	struct tracecmd_msg_handle *msg_handle;
 	char host[NI_MAXHOST], service[NI_MAXSERV];
@@ -1120,8 +1120,10 @@ static int do_connection(int cfd, struct sockaddr *peer_addr,
 
 	pagesize = communicate_with_client(msg_handle, domain, mode);
 
-	if (msg_handle->flags & TRACECMD_MSG_FL_AGENT)
+	if (msg_handle->flags & TRACECMD_MSG_FL_AGENT) {
+		*cpu_count = msg_handle->cpu_count;
 		return PID_AGENT;
+	}
 
 	if (pagesize <= 0)
 		return -EINVAL;
@@ -1168,6 +1170,7 @@ struct client_list {
 	char			*name;
 	int			pid;
 	int			fd_idx;
+	int			cpu_count;
 	enum client_type	type;
 };
 
@@ -1916,11 +1919,13 @@ static void do_accept_loop(int nfd, int vfd, int mfd)
 			}
 
 			if (i == FD_NET)
-				pid = do_connection(cfd, &addr, addrlen, NULL, 0, NET);
+				pid = do_connection(cfd, &addr, addrlen, NULL, 0, NET,
+						    NULL);
 			else {
 				pid = do_connection(cfd, NULL, 0,
 						    client->name,
-						    client->pid, VIRT);
+						    client->pid, VIRT,
+						    &client->cpu_count);
 				/*
 				 * The child process is accessing this file descriptor,
 				 * don't poll on it for now. The clean up

@@ -371,7 +371,7 @@ int tracecmd_msg_send_domain(struct tracecmd_msg_handle *msg_handle,
 int tracecmd_msg_send_finish(struct tracecmd_msg_handle *msg_handle);
 
 /* for agent */
-int tracecmd_msg_agent_connect(struct tracecmd_msg_handle *msg_handle);
+int tracecmd_msg_agent_connect(struct tracecmd_msg_handle *msg_handle, int cpu_count);
 
 /* for managers */
 int tracecmd_msg_list_guests(struct tracecmd_msg_handle *msg_handle);

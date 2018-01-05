@@ -82,6 +82,9 @@ static inline void dprint(const char *fmt, ...)
 #define MIN_DOMAIN_SIZE (sizeof(struct tracecmd_msg_header) + \
 			 sizeof(struct tracecmd_msg_domain))
 
+#define MIN_CINIT_SIZE (sizeof(struct tracecmd_msg_header) + \
+			sizeof(struct tracecmd_msg_cinit))
+
 /* use CONNECTION_MSG as a protocol version of trace-msg */
 #define MSG_VERSION		"V2"
 #define CONNECTION_MSG		"tracecmd-" MSG_VERSION
@@ -128,6 +131,10 @@ struct tracecmd_msg_domain {
 	be32 cpus;
 } __attribute__((packed));
 
+struct tracecmd_msg_cinit {
+	be32 cpus;
+} __attribute__((packed));
+
 struct tracecmd_msg_data {
 	be32 size;
 } __attribute__((packed));
@@ -151,7 +158,7 @@ struct tracecmd_msg_header {
 	C(GLIST,	10,	0),			\
 	C(DOMAIN,	11,	MIN_DOMAIN_SIZE),	\
 	C(FINISH,	12,	0),			\
-	C(CINIT,	13,	0),			\
+	C(CINIT,	13,	MIN_CINIT_SIZE),	\
 	C(CRINIT,	14,	0),			\
 	C(MAX,		15,	-1)
 
@@ -195,6 +202,7 @@ struct tracecmd_msg {
 		struct tracecmd_msg_rinit	rinit;
 		struct tracecmd_msg_connect	connect;
 		struct tracecmd_msg_connect	domain;
+		struct tracecmd_msg_cinit	cinit;
 		struct tracecmd_msg_data	data;
 		struct tracecmd_msg_error	err;
 	};
@@ -575,7 +583,7 @@ int tracecmd_msg_send_init_data(struct tracecmd_msg_handle *msg_handle,
 	return 0;
 }
 
-int tracecmd_msg_agent_connect(struct tracecmd_msg_handle *msg_handle)
+int tracecmd_msg_agent_connect(struct tracecmd_msg_handle *msg_handle, int cpu_count)
 {
 	struct tracecmd_msg msg;
 	int fd = msg_handle->fd;
@@ -583,6 +591,7 @@ int tracecmd_msg_agent_connect(struct tracecmd_msg_handle *msg_handle)
 	u32 cmd;
 
 	tracecmd_msg_init(MSG_CINIT, &msg);
+	msg.cinit.cpus = cpu_count;
 	ret = tracecmd_msg_send(fd, &msg);
 	if (ret < 0)
 		return ret;
@@ -1007,6 +1016,7 @@ int tracecmd_msg_initial_setting(struct tracecmd_msg_handle *msg_handle)
 	if (cmd == MSG_CINIT) {
 		/* This is a client agent */
 		msg_handle->flags |= TRACECMD_MSG_FL_AGENT;
+		msg_handle->cpu_count = msg.cinit.cpus;
 		tracecmd_msg_init(MSG_CRINIT, &msg);
 		return tracecmd_msg_send(msg_handle->fd, &msg);
 	}

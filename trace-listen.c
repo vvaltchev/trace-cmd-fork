@@ -1223,6 +1223,7 @@ static void reset_client(struct client_list *client)
 	plog("Closing %s:%d\n", name, client->pid);
 	free(client->name);
 	memset(client, 0, sizeof(*client));
+	free_clients++;
 }
 
 static void remove_process(int pid, int status)

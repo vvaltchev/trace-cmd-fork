@@ -1207,17 +1207,7 @@ static void add_process(int pid, int idx)
 
 static int active_processes(void)
 {
-	int ret = 0;
-	int i;
-
-	for (i = 0; i < nr_pids; i++) {
-		if (client_pids[i].pid) {
-			ret = 1;
-			break;
-		}
-	}
-
-	return ret;
+	return nr_pids != free_pids;
 }
 
 static void reset_fds(struct pollfd *fd)

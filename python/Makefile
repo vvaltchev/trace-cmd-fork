@@ -1,40 +1,44 @@
 include $(src)/scripts/utils.mk
 
+bdir:=$(obj)/python
+
 TRACE_VIEW_OBJS =
 TRACE_VIEW_OBJS += $(obj)/kernel-shark/trace-view.o
 TRACE_VIEW_OBJS += $(obj)/kernel-shark/trace-view-store.o
 
 ifdef BUILD_PYTHON_WORKS
-PYTHON_SO_INSTALL := ctracecmd.install
-PYTHON_PY_PROGS := event-viewer.install
-PYTHON_PY_LIBS := tracecmd.install tracecmdgui.install
+PYTHON_SO_INSTALL := $(bdir)/ctracecmd.install
+PYTHON_PY_PROGS := $(bdir)/event-viewer.install
+PYTHON_PY_LIBS := $(bdir)/tracecmd.install $(bdir)/tracecmdgui.install
 endif
 
-ctracecmd.so: ctracecmd.i $(LIBTRACECMD_STATIC)
+$(bdir)/ctracecmd.so: ctracecmd.i $(LIBTRACECMD_STATIC) | $(bdir)
 	swig -Wall -python -noproxy -I$(src)/include/traceevent -I$(src)/include/trace-cmd ctracecmd.i
-	$(CC) -fpic -c $(CPPFLAGS) $(CFLAGS) $(PYTHON_INCLUDES)  ctracecmd_wrap.c
-	$(CC) --shared $(LIBTRACECMD_STATIC) $(LDFLAGS) ctracecmd_wrap.o -o ctracecmd.so
+	$(CC) -fpic -c $(CPPFLAGS) $(CFLAGS) $(PYTHON_INCLUDES) -o $(bdir)/ctracecmd_wrap.o ctracecmd_wrap.c
+	$(CC) --shared $(LIBTRACECMD_STATIC) $(LDFLAGS) $(bdir)/ctracecmd_wrap.o -o $(bdir)/ctracecmd.so
 
-ctracecmdgui.so: ctracecmdgui.i $(LIBTRACECMD_STATIC) $(TRACE_VIEW_OBJS)
+$(bdir)/ctracecmdgui.so: ctracecmdgui.i $(LIBTRACECMD_STATIC) $(TRACE_VIEW_OBJS) | $(bdir)
 	swig -Wall -python -noproxy -I$(src)/kernel-shark/include ctracecmdgui.i
-	$(CC) -fpic -c  $(CPPFLAGS) $(CFLAGS) $(INCLUDES) $(PYTHON_INCLUDES) $(PYGTK_CFLAGS) ctracecmdgui_wrap.c
-	$(CC) --shared $(TRACE_VIEW_OBJS) $(LIBTRACECMD_STATIC) $(LDFLAGS) $(LIBS) $(CONFIG_LIBS) ctracecmdgui_wrap.o -o ctracecmdgui.so
+	$(CC) -fpic -c  $(CPPFLAGS) $(CFLAGS) $(INCLUDES) $(PYTHON_INCLUDES) $(PYGTK_CFLAGS) -o $(bdir)/ctracecmdgui_wrap.o ctracecmdgui_wrap.c
+	$(CC) --shared $(TRACE_VIEW_OBJS) $(LIBTRACECMD_STATIC) $(LDFLAGS) $(LIBS) $(CONFIG_LIBS) $(bdir)/ctracecmdgui_wrap.o -o $(bdir)/ctracecmdgui.so
 
+$(bdir):
+	@mkdir -p $(bdir)
 
-$(PYTHON_SO_INSTALL): %.install : %.so force
+$(PYTHON_SO_INSTALL): $(bdir)/%.install : $(bdir)/%.so force
 	$(Q)$(call do_install_data,$<,$(python_dir_SQ))
 
-$(PYTHON_PY_PROGS): %.install : %.py force
+$(PYTHON_PY_PROGS): $(bdir)/%.install : %.py force
 	$(Q)$(call do_install,$<,$(python_dir_SQ))
 
-$(PYTHON_PY_LIBS): %.install : %.py force
+$(PYTHON_PY_LIBS): $(bdir)/%.install : %.py force
 	$(Q)$(call do_install_data,$<,$(python_dir_SQ))
 
 install_python: $(PYTHON_SO_INSTALL) $(PYTHON_PY_PROGS) $(PYTHON_PY_LIBS)
 
 
 clean:
-	$(RM) *.a *.so *.o .*.d ctracecmd_wrap.* ctracecmdgui_wrap.*
+	$(RM) $(bdir)/*.a $(bdir)/*.so $(bdir)/*.o $(bdir)/.*.d $(bdir)/ctracecmd_wrap.* $(bdir)/ctracecmdgui_wrap.*
 
 force:
 .PHONY: clean force

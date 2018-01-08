@@ -375,10 +375,10 @@ export PYTHON_LDFLAGS
 export PYGTK_CFLAGS
 
 ctracecmd.so: force $(LIBTRACECMD_STATIC)
-	$(Q)$(MAKE) -C $(src)/python $@
+	$(Q)$(MAKE) -C $(src)/python $(obj)/python/ctracecmd.so
 
 ctracecmdgui.so: force $(LIBTRACECMD_STATIC) trace-view
-	$(Q)$(MAKE) -C $(src)/python $@
+	$(Q)$(MAKE) -C $(src)/python $(obj)/python/ctracecmdgui.so
 
 PHONY += python
 python: $(PYTHON)

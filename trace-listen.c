@@ -48,6 +48,7 @@ static char *default_output_dir = ".";
 static char *output_dir;
 static char *default_output_file = "trace";
 static char *output_file;
+static char *default_group = "qemu";
 
 static FILE *logfp;
 
@@ -2081,7 +2082,7 @@ static void make_traceif_in_dom_dir(const char *name, int cpu)
 static void make_domain_dirs(void)
 {
 	struct domain_dir *dom_dir;
-	char gr_name[5] = "qemu";
+	char *gr_name = default_group;
 	char buf[PATH_MAX];
 	mode_t perms;
 
@@ -2114,7 +2115,7 @@ static void make_domain_dirs(void)
 
 static void make_virt_if_dir(void)
 {
-	char gr_name[5] = "qemu";
+	char *gr_name = default_group;
 
 	/* QEMU operates as qemu:qemu */
 	make_dir(TRACE_CMD_DIR, 0755);
@@ -2156,7 +2157,7 @@ static int set_up_socket(const char *file)
 	unlink_sock = 1;
 
 	chmod(file, 0660);
-	group = getgrnam("qemu");
+	group = getgrnam(default_group);
 	if (chown(file, -1, group->gr_gid) < 0)
 		pdie("fchown %s", file);
 
@@ -2272,9 +2273,10 @@ void trace_listen(int argc, char **argv)
 		case 'g':
 			if (!virt)
 				die("-g requires --virt first");
-			if (!dom_dir)
-				die("-g needs --dom <domain>");
-			dom_dir->group = optarg;
+			if (dom_dir)
+				dom_dir->group = optarg;
+			else
+				default_group = optarg;
 			break;
 		case 'c':
 			if (!virt)

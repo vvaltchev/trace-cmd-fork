@@ -1160,6 +1160,7 @@ enum {
 enum client_type {
 	CLIENT_NORM	= 1,
 	CLIENT_AGENT	= 2,
+	CLIENT_MANAGER	= 3,
 };
 
 struct client_pid_list {
@@ -1709,6 +1710,97 @@ add_domain(const char *domain, const char *agent_fifo,
 	return NULL;
 }
 
+static int connect_manager_with_agent(struct tracecmd_msg_handle *msg_handle,
+				      int client_idx)
+{
+	struct client_list *client;
+	struct client_list *manager;
+	struct manager_list *mgr = NULL;
+	struct pollfd *pfd;
+	int cpus;
+	int idx;
+	int ret;
+	int i;
+
+	client = &clients[client_idx];
+	/* See if there is a proxy for this client */
+	for (i = 0; i < nr_managers; i++) {
+		if (managers[i].pid == client->pid) {
+			mgr = &managers[i];
+			break;
+		}
+	}
+
+	/*
+	 * Create a idx for the manager. It's only used to keep track
+	 * that the manager has the agent's fd, and nothing can use it.
+	 * If the manager were to exit, the poll will stop and POLLHUP
+	 * will be set for this client, and then we can release the fd
+	 * for the agent for others to use again.
+	 */
+	idx = get_new_fd();
+	if (idx < 0) {
+		plog("Failed to allocate for new connection for manager\n");
+		return idx;
+	}
+
+	/* This can modify the client pointer, so reference with the index instead */
+	manager = get_new_client(idx);
+	if (!manager) {
+		plog("Failed to allocate client for manage\n");
+		return -ENOMEM;
+	}
+
+	/*
+	 * Since the client array could have moved due to the realloc,
+	 * reload the client pointer.
+	 */
+	client = &clients[client_idx];
+
+	/* Save the client's fd index in the manager's client pid */
+	update_client(manager, NULL, client->fd_idx);
+	manager->type = CLIENT_MANAGER;
+	manager->fd_idx = idx;
+
+	fds[idx].fd = msg_handle->fd;
+	fds[idx].events = 0; /* Only care about POLLHUP */
+
+	/* If there's no manager, than they are on their own */
+	if (mgr)
+		cpus = client->cpu_count;
+	else
+		cpus = 0;
+
+	pfd = &fds[client->fd_idx];
+
+	ret = tracecmd_msg_transfer_fd(msg_handle, pfd->fd, cpus);
+	if (ret < 0)
+		goto err;
+
+	for (i = 0; i < cpus; i++) {
+		int fd;
+
+		fd = open(mgr->cpu_files[i].out, O_RDONLY);
+		if (fd < 0)
+			goto err;
+		ret = tracecmd_msg_transfer_fd(msg_handle, fd, cpus - i);
+		close(fd);
+		if (ret < 0)
+			goto err;
+	}
+	/* Do not listen to this agent while the manager has it. */
+	pfd->events = 0;
+	/* Don't close this fd */
+	msg_handle->fd = -1;
+
+	return 0;
+ err:
+	reset_client(manager);
+	reset_fds(&fds[idx]);
+	free_fds++;
+	return ret;
+}
+
 static int handle_manager(int cfd)
 {
 	struct tracecmd_msg_handle *msg_handle;
@@ -1774,6 +1866,48 @@ static int handle_manager(int cfd)
 		if (ret >= 0)
 			tracecmd_msg_send_finish(msg_handle);
 		break;
+	case TRACECMD_MSG_MNG_TRACE:
+		if (msg_handle->pid) {
+			for (i = FD_CONNECTED; i < nr_fds; i++) {
+				if (fds[i].fd < 0)
+					continue;
+				client = &clients[i - FD_CONNECTED];
+				if (client->type != CLIENT_AGENT)
+					continue;
+				if (client->pid != msg_handle->pid)
+					continue;
+				ret = tracecmd_msg_send_cpus(msg_handle,
+							     client->cpu_count);
+				break;
+			}
+			if (i == nr_fds)
+				ret = tracecmd_msg_send_finish(msg_handle);
+			break;
+		}
+		/* Ask for the domain */
+		ret = tracecmd_msg_get_domain(msg_handle, &domain);
+		if (ret < 0)
+			break;
+		for (i = FD_CONNECTED; i < nr_fds; i++) {
+			if (fds[i].fd < 0)
+				continue;
+			client = &clients[i - FD_CONNECTED];
+			if (client->type != CLIENT_AGENT)
+				continue;
+			if (strcmp(client->name, domain) != 0)
+				continue;
+			ret = tracecmd_msg_send_cpus(msg_handle,
+						     client->cpu_count);
+			break;
+		}
+		free(domain);
+		if (i == nr_fds) {
+			ret = -ENODEV;
+			break;
+		}
+
+		ret = connect_manager_with_agent(msg_handle, i - FD_CONNECTED);
+		break;
 	default:
 		ret = -EINVAL;
 		break;
@@ -1783,6 +1917,12 @@ static int handle_manager(int cfd)
 	tracecmd_msg_handle_close(msg_handle);
 
 	return ret;
+}
+
+static void release_fds(struct client_list *manager)
+{
+	/* The manager exited, listen to the agent again. */
+	fds[manager->pid].events = POLLIN;
 }
 
 static void do_accept_loop(int nfd, int vfd, int mfd)
@@ -1843,6 +1983,8 @@ static void do_accept_loop(int nfd, int vfd, int mfd)
 
 			if (fds[i].revents & POLLHUP) {
 				client = find_client(clients, i);
+				if (client->type == CLIENT_MANAGER)
+					release_fds(client);
 				reset_fds(&fds[i]);
 				reset_client(client);
 				if (i >= FD_CONNECTED)

@@ -184,6 +184,7 @@ enum buffer_instance_flags {
 	BUFFER_FL_KEEP		= 1 << 0,
 	BUFFER_FL_PROFILE	= 1 << 1,
 	BUFFER_FL_VIRT		= 1 << 2,
+	BUFFER_FL_GUEST		= 1 << 3,
 };
 
 struct func_list {
@@ -224,6 +225,9 @@ struct buffer_instance {
 	int			tracing_on_fd;
 	int			buffer_size;
 	int			cpu_count;
+
+	int			argc;
+	char			**argv;
 };
 
 extern struct buffer_instance top_instance;

@@ -763,6 +763,9 @@ static void __clear_trace(struct buffer_instance *instance)
 	FILE *fp;
 	char *path;
 
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
+
 	/* reset the trace */
 	path = get_instance_file(instance, "trace");
 	fp = fopen(path, "w");
@@ -1246,6 +1249,9 @@ set_plugin_instance(struct buffer_instance *instance, const char *name)
 	char *path;
 	char zero = '0';
 
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
+
 	path = get_instance_file(instance, "current_tracer");
 	fp = fopen(path, "w");
 	if (!fp) {
@@ -1341,6 +1347,9 @@ static void disable_func_stack_trace_instance(struct buffer_instance *instance)
 	char *cond;
 	int size;
 	int ret;
+
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
 
 	path = get_instance_file(instance, "current_tracer");
 	ret = stat(path, &st);
@@ -1534,6 +1543,9 @@ reset_events_instance(struct buffer_instance *instance)
 	int fd;
 	int i;
 	int ret;
+
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
 
 	if (use_old_event_method()) {
 		/* old way only had top instance */
@@ -1886,6 +1898,9 @@ static void write_tracing_on(struct buffer_instance *instance, int on)
 	int ret;
 	int fd;
 
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
+
 	fd = open_tracing_on(instance);
 	if (fd < 0)
 		return;
@@ -1904,6 +1919,9 @@ static int read_tracing_on(struct buffer_instance *instance)
 	int fd;
 	char buf[10];
 	int ret;
+
+	if (instance->flags & BUFFER_FL_GUEST)
+		return -1;
 
 	fd = open_tracing_on(instance);
 	if (fd < 0)
@@ -2138,6 +2156,9 @@ static void set_mask(struct buffer_instance *instance)
 	int fd;
 	int ret;
 
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
+
 	if (!instance->cpumask)
 		return;
 
@@ -2168,6 +2189,9 @@ static void enable_events(struct buffer_instance *instance)
 {
 	struct event_list *event;
 
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
+
 	for (event = instance->events; event; event = event->next) {
 		if (!event->neg)
 			update_event(event, event->filter, 0, '1');
@@ -2190,6 +2214,9 @@ static void set_clock(struct buffer_instance *instance)
 	char *path;
 	char *content;
 	char *str;
+
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
 
 	if (!instance->clock)
 		return;
@@ -2219,6 +2246,9 @@ static void set_max_graph_depth(struct buffer_instance *instance, char *max_grap
 {
 	char *path;
 	int ret;
+
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
 
 	path = get_instance_file(instance, "max_graph_depth");
 	reset_save_file(path, RESET_DEFAULT_PRIO);
@@ -2445,6 +2475,9 @@ static void expand_event_instance(struct buffer_instance *instance)
 	struct event_list *compressed_list = instance->events;
 	struct event_list *event;
 
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
+
 	reset_event_list(instance);
 
 	while (compressed_list) {
@@ -2644,7 +2677,9 @@ static int create_recorder(struct buffer_instance *instance, int cpu,
 		instance->cpu_count = 0;
 	}
 
-	if (client_ports) {
+	if (instance->flags & BUFFER_FL_GUEST) {
+
+	} else if (client_ports) {
 		char *path;
 
 		if (!(instance->flags & BUFFER_FL_VIRT))
@@ -2943,6 +2978,57 @@ static void setup_connection(struct buffer_instance *instance)
 	/* OK, we are all set, let'r rip! */
 }
 
+static int connect_to_agent(struct buffer_instance *instance)
+{
+	struct tracecmd_msg_handle *msg_handle;
+	int *agent_cpu_fds;
+	char *guest;
+	char *str;
+	int pid = 0;
+	int ret;
+	int fd;
+
+	fd = tracecmd_connect_to_socket(TRACE_MRG_SOCK);
+	if (fd < 0)
+		die("Can't connect to %s\n", TRACE_MRG_SOCK);
+
+	str = strdup(instance->name);
+	if (!str)
+		return -ENOMEM;
+
+	guest = strtok(str, ":");
+	str = strtok(NULL, ":");
+	if (str) {
+		pid = atoi(str);
+		free(str);
+	}
+
+	msg_handle = tracecmd_msg_handle_alloc(fd, TRACECMD_MSG_FL_MANAGER);
+	if (!msg_handle) {
+		free(guest);
+		return -ENOMEM;
+	}
+	ret = tracecmd_msg_connect_agent(msg_handle, guest,
+					 pid, &instance->cpu_count);
+	free(guest);
+	if (ret < 0) {
+		tracecmd_msg_handle_close(msg_handle);
+		return ret;
+	}
+
+	agent_cpu_fds = calloc(instance->cpu_count, sizeof(int));
+	if (!agent_cpu_fds) {
+		tracecmd_msg_handle_close(msg_handle);
+		return -ENOMEM;
+	}
+	ret = tracecmd_msg_get_fds(msg_handle, instance->cpu_count, agent_cpu_fds);
+
+	/* the msg_handle now points to the guest fd */
+	instance->msg_handle = msg_handle;
+
+	return ret;
+}
+
 static void finish_network(struct buffer_instance *instance)
 {
 	struct tracecmd_msg_handle *msg_handle = instance->msg_handle;
@@ -2962,8 +3048,15 @@ static void start_threads(enum trace_type type, int global)
 	int i = 0;
 	int ret;
 
-	for_all_instances(instance)
+	for_all_instances(instance) {
+		/* Start the connection now to find out how many CPUs we need */
+		if (instance->flags & BUFFER_FL_GUEST) {
+			ret = connect_to_agent(instance);
+			if (ret < 0)
+				die("Failed to connect to agent");
+		}
 		total_cpu_count += instance->cpu_count;
+	}
 
 	/* make a thread for every CPU we have */
 	pids = malloc(sizeof(*pids) * total_cpu_count * (buffers + 1));
@@ -2975,7 +3068,8 @@ static void start_threads(enum trace_type type, int global)
 	for_all_instances(instance) {
 		int x, pid;
 
-		if (instance->host || (instance->flags & BUFFER_FL_VIRT)) {
+		if (instance->host ||
+		    (instance->flags & (BUFFER_FL_VIRT | BUFFER_FL_GUEST))) {
 			setup_connection(instance);
 			if (!instance->msg_handle)
 				die("Failed to make connection");
@@ -3343,6 +3437,9 @@ static void set_funcs(struct buffer_instance *instance)
 	int set_notrace = 0;
 	int ret;
 
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
+
 	ret = write_func_file(instance, "set_ftrace_filter", &instance->filter_funcs);
 	if (ret < 0)
 		die("set_ftrace_filter does not exist. Can not filter functions");
@@ -3637,6 +3734,9 @@ static void set_buffer_size_instance(struct buffer_instance *instance)
 	int ret;
 	int fd;
 
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
+
 	if (!buffer_size)
 		return;
 
@@ -3834,6 +3934,10 @@ static void make_instances(void)
 	int ret;
 
 	for_each_instance(instance) {
+
+		if (instance->flags & BUFFER_FL_GUEST)
+			continue;
+
 		path = get_instance_dir(instance);
 		ret = stat(path, &st);
 		if (ret < 0) {
@@ -3937,7 +4041,7 @@ static void check_function_plugin(void)
 
 static int __check_doing_something(struct buffer_instance *instance)
 {
-	return (instance->flags & BUFFER_FL_PROFILE) ||
+	return (instance->flags & (BUFFER_FL_PROFILE|BUFFER_FL_GUEST)) ||
 		instance->plugin || instance->events;
 }
 
@@ -3958,6 +4062,9 @@ update_plugin_instance(struct buffer_instance *instance,
 		       enum trace_type type)
 {
 	const char *plugin = instance->plugin;
+
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
 
 	if (!plugin)
 		return;
@@ -4058,6 +4165,10 @@ static void record_stats(void)
 	int cpu;
 
 	for_all_instances(instance) {
+
+		if (instance->flags & BUFFER_FL_GUEST)
+			continue;
+
 		s_save = instance->s_save;
 		s_print = instance->s_print;
 		for (cpu = 0; cpu < instance->cpu_count; cpu++) {
@@ -4242,6 +4353,9 @@ static void enable_profile(struct buffer_instance *instance)
 		"raw_syscalls",
 		NULL,
 	};
+
+	if (instance->flags & BUFFER_FL_GUEST)
+		return;
 
 	if (!instance->plugin) {
 		if (trace_check_file_exists(instance, "max_graph_depth")) {
@@ -4550,6 +4664,56 @@ static void init_common_record_context(struct common_record_context *ctx,
 #define IS_PROFILE(ctx) ((ctx)->curr_cmd == CMD_profile)
 #define IS_RECORD(ctx) ((ctx)->curr_cmd == CMD_record)
 
+static void add_argv(struct buffer_instance *instance, char *arg)
+{
+	instance->argv = realloc(instance->argv,
+				 sizeof(char *) * instance->argc + 1);
+	if (!instance->argv)
+		die("Can not allocate buffer args");
+	instance->argv[instance->argc] = arg;
+	instance->argc++;
+}
+
+static void add_arg(struct buffer_instance *instance,
+		    int c, const char *opts,
+		    struct option *long_options, char *optarg)
+{
+	char *ptr;
+	char *arg;
+	int ret;
+	int i;
+
+	/* Short or long arg */
+	if (!(c & 0x80)) {
+		ret = asprintf(&arg, "-%c", c);
+		if (ret < 0)
+			die("Can not allocate argument");
+		ptr = strstr(opts, arg+1);
+		if (!ptr)
+			return; /* Not found? */
+		add_argv(instance, arg);
+		if (ptr[1] == ':')
+			add_argv(instance, optarg);
+		return;
+	}
+	for (i = 0; long_options[i].name; i++) {
+		if (c == long_options[i].val) {
+			ret = asprintf(&arg, "--%s", long_options[i].name);
+			if (ret < 0)
+				die("Can not allocate argument");
+			add_argv(instance, arg);
+			if (long_options[i].has_arg) {
+				arg = strdup(optarg);
+				if (!arg)
+					die("Can not allocate arguements");
+				add_argv(instance, arg);
+				return;
+			}
+		}
+	}
+	/* Not found? */
+}
+
 static void parse_record_options(int argc,
 				 char **argv,
 				 enum trace_cmd curr_cmd,
@@ -4591,10 +4755,19 @@ static void parse_record_options(int argc,
 		if (IS_EXTRACT(ctx))
 			opts = "+haf:Fp:co:O:sr:g:l:n:P:N:tb:B:ksiT";
 		else
-			opts = "+hae:f:Fp:cC:dDGo:O:s:r:vg:l:n:P:N:tb:R:B:ksSiTm:M:H:q";
+			opts = "+hae:f:FA:p:cC:dDGo:O:s:r:vg:l:n:P:N:tb:R:B:ksSiTm:M:H:q";
 		c = getopt_long (argc-1, argv+1, opts, long_options, &option_index);
 		if (c == -1)
 			break;
+		/*
+		 * If the current instance is to record a guest, then save
+		 * all the arguements for this instance.
+		 */
+		if (c != 'B' && c != 'A' && ctx->instance->flags & BUFFER_FL_GUEST) {
+			add_arg(ctx->instance, c, opts, long_options, optarg);
+			continue;
+		}
+
 		switch (c) {
 		case 'h':
 			usage(argv);
@@ -4647,6 +4820,13 @@ static void parse_record_options(int argc,
 			add_trigger(event, optarg);
 			break;
 
+		case 'A':
+			if (!IS_RECORD(ctx))
+				die("-A is only allowed for record operations");
+			ctx->instance = create_instance(optarg);
+			ctx->instance->flags |= BUFFER_FL_GUEST;
+			add_instance(ctx->instance, 0);
+			break;
 		case 'F':
 			test_set_event_pid();
 			filter_task = 1;
@@ -4981,6 +5161,9 @@ static void record_trace(int argc, char **argv,
 		 */
 		if ((ctx->instance->flags & BUFFER_FL_VIRT) && !first_instance->next)
 			first_instance->flags |= BUFFER_FL_VIRT;
+		/* Same for guest agent (-A) */
+		if ((ctx->instance->flags & BUFFER_FL_GUEST) && !first_instance->next)
+			first_instance->flags |= BUFFER_FL_GUEST;
 	} else
 		ctx->topt = 1;
 
@@ -5010,7 +5193,8 @@ static void record_trace(int argc, char **argv,
 
 	page_size = getpagesize();
 
-	fset = set_ftrace(!ctx->disable, ctx->total_disable);
+	if (!(ctx->instance->flags & BUFFER_FL_GUEST))
+		fset = set_ftrace(!ctx->disable, ctx->total_disable);
 	tracecmd_disable_all_tracing(1);
 
 	for_all_instances(instance)

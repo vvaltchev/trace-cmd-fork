@@ -44,6 +44,8 @@ static struct tracecmd_msg_handle *
 communicate_with_listener_virt_agent(int fd, int cpu_count)
 {
 	struct tracecmd_msg_handle *msg_handle;
+	char **argv;
+	int argc;
 
 	msg_handle = tracecmd_msg_handle_alloc(fd,
 					TRACECMD_MSG_FL_CLIENT |
@@ -55,8 +57,16 @@ communicate_with_listener_virt_agent(int fd, int cpu_count)
 	if (tracecmd_msg_connect_to_server(msg_handle) < 0)
 		die("Cannot communicate with server");
 
-	if (tracecmd_msg_agent_connect(msg_handle, cpu_count) < 0)
+	argc = tracecmd_msg_agent_connect(msg_handle, cpu_count);
+	if (argc < 0)
 		die("Cannot connect to server");
+
+	argv = calloc(argc, sizeof(*argv));
+	if (!argv)
+		die("Failed to allocate arguments");
+
+	if (tracecmd_msg_agent_parameters(msg_handle, argc, argv) < 0)
+		die("Failed to get parameters");
 
 	return msg_handle;
 }

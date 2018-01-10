@@ -327,11 +327,13 @@ enum tracecmd_msg_mngr_type {
 	TRACECMD_MSG_MNG_CONNECT	= 1,
 	TRACECMD_MSG_MNG_GLIST		= 2,
 	TRACECMD_MSG_MNG_ALIST		= 3,
+	TRACECMD_MSG_MNG_TRACE		= 4,
 };
 
 /* for both client and server */
 struct tracecmd_msg_handle {
 	int			fd;
+	int			pid;
 	short			cpu_count;
 	short			version;	/* Current protocol version */
 	unsigned long		flags;
@@ -367,12 +369,17 @@ tracecmd_msg_read_manager(struct tracecmd_msg_handle *msg_handle);
 int tracecmd_msg_get_connect(struct tracecmd_msg_handle *msg_handle,
 			     char **domain, char **agent_fifo,
 			     char ***cpu_fifos);
+int tracecmd_msg_send_cpus(struct tracecmd_msg_handle *msg_handle, int cpu);
 int tracecmd_msg_send_domain(struct tracecmd_msg_handle *msg_handle,
 			     char *domain, int cpus);
+int tracecmd_msg_get_domain(struct tracecmd_msg_handle *msg_handle, char **domain);
 int tracecmd_msg_send_finish(struct tracecmd_msg_handle *msg_handle);
+int tracecmd_msg_transfer_fd(struct tracecmd_msg_handle *msg_handle, int fd, int cpus);
 
 /* for agent */
 int tracecmd_msg_agent_connect(struct tracecmd_msg_handle *msg_handle, int cpu_count);
+int tracecmd_msg_agent_parameters(struct tracecmd_msg_handle *msg_handle,
+				  int argc, char **argv);
 
 /* for managers */
 int tracecmd_msg_list_guests(struct tracecmd_msg_handle *msg_handle);
@@ -380,6 +387,10 @@ int tracecmd_msg_list_agents(struct tracecmd_msg_handle *msg_handle);
 int tracecmd_msg_connect_guest(struct tracecmd_msg_handle *msg_handle,
 			       const char *domain, const char *agent,
 			       int nr_cpus, char * const *cpu_list);
+int tracecmd_msg_connect_agent(struct tracecmd_msg_handle *msg_handle,
+			       const char *guest, int pid, int *cpu_count);
+int tracecmd_msg_get_fds(struct tracecmd_msg_handle *msg_handle,
+			 int cpu_count, int *fds);
 
 
 /* --- Plugin handling --- */

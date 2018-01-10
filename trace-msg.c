@@ -85,6 +85,9 @@ static inline void dprint(const char *fmt, ...)
 #define MIN_CINIT_SIZE (sizeof(struct tracecmd_msg_header) + \
 			sizeof(struct tracecmd_msg_cinit))
 
+#define MIN_TRACE_SIZE (sizeof(struct tracecmd_msg_header) + \
+			sizeof(struct tracecmd_msg_trace))
+
 /* use CONNECTION_MSG as a protocol version of trace-msg */
 #define MSG_VERSION		"V2"
 #define CONNECTION_MSG		"tracecmd-" MSG_VERSION
@@ -124,7 +127,10 @@ struct tracecmd_msg_rinit {
 } __attribute__((packed));
 
 struct tracecmd_msg_connect {
-	be32 cpus;
+	union {
+		be32 cpus;
+		be32 argc;
+	};
 } __attribute__((packed));
 
 struct tracecmd_msg_domain {
@@ -133,6 +139,10 @@ struct tracecmd_msg_domain {
 
 struct tracecmd_msg_cinit {
 	be32 cpus;
+} __attribute__((packed));
+
+struct tracecmd_msg_trace {
+	be32 pid;
 } __attribute__((packed));
 
 struct tracecmd_msg_data {
@@ -161,7 +171,8 @@ struct tracecmd_msg_header {
 	C(CINIT,	13,	MIN_CINIT_SIZE),	\
 	C(CRINIT,	14,	0),			\
 	C(ALIST,	15,	0),			\
-	C(MAX,		16,	-1)
+	C(TRACE,	16,	MIN_TRACE_SIZE),	\
+	C(MAX,		17,	-1)
 
 #undef C
 #define C(a,b,c)	MSG_##a = b
@@ -204,6 +215,7 @@ struct tracecmd_msg {
 		struct tracecmd_msg_connect	connect;
 		struct tracecmd_msg_connect	domain;
 		struct tracecmd_msg_cinit	cinit;
+		struct tracecmd_msg_trace	trace;
 		struct tracecmd_msg_data	data;
 		struct tracecmd_msg_error	err;
 	};
@@ -215,6 +227,80 @@ struct tracecmd_msg {
 } __attribute__((packed));
 
 struct tracecmd_msg *errmsg;
+
+static int read_fd(int sfd)
+{
+	struct msghdr	msg;
+	struct iovec	iov[1];
+	char		buf[2];
+	ssize_t		n;
+	int		recvfd;
+	union {
+		struct cmsghdr	cm;
+		char		 control[CMSG_SPACE(sizeof(int))];
+	} control_un;
+	struct cmsghdr		*cmptr;
+
+	msg.msg_control = control_un.control;
+	msg.msg_controllen = sizeof(control_un.control);
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
+	iov[0].iov_base = buf;
+	iov[0].iov_len = 2;
+	msg.msg_iov = iov;
+	msg.msg_iovlen = 1;
+	if ( (n = recvmsg(sfd, &msg, 0)) <= 0)
+		return(n);
+
+	if ( (cmptr = CMSG_FIRSTHDR(&msg)) != NULL &&
+	     cmptr->cmsg_len == CMSG_LEN(sizeof(int))) {
+		if (cmptr->cmsg_level != SOL_SOCKET) {
+			perror("control level != SOL_SOCKET");
+			return -1;
+		}
+		if (cmptr->cmsg_type != SCM_RIGHTS) {
+			perror("control type != SCM_RIGHTS");
+			return -1;
+		}
+		recvfd = *((int *) CMSG_DATA(cmptr));
+	} else
+		recvfd = -1;       /* descriptor was not passed */
+    return recvfd;
+}
+
+static ssize_t write_fd(int fd, int sendfd)
+{
+	struct msghdr   msg;
+	struct iovec    iov[1];
+	char buf[2];
+
+	union {
+		struct cmsghdr    cm;
+		char              control[CMSG_SPACE(sizeof(int))];
+	} control_un;
+	struct cmsghdr  *cmptr;
+
+	msg.msg_control = control_un.control;
+	msg.msg_controllen = sizeof(control_un.control);
+
+	cmptr = CMSG_FIRSTHDR(&msg);
+	cmptr->cmsg_len = CMSG_LEN(sizeof(int));
+	cmptr->cmsg_level = SOL_SOCKET;
+	cmptr->cmsg_type = SCM_RIGHTS;
+	*((int *) CMSG_DATA(cmptr)) = sendfd;
+
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
+
+	iov[0].iov_base = buf;
+	iov[0].iov_len = 2;
+	msg.msg_iov = iov;
+	msg.msg_iovlen = 1;
+
+	buf[0] = 0;
+
+	return sendmsg(fd, &msg, 0);
+}
 
 static int msg_write(int fd, struct tracecmd_msg *msg)
 {
@@ -625,7 +711,7 @@ int tracecmd_msg_agent_connect(struct tracecmd_msg_handle *msg_handle, int cpu_c
 		return -EINVAL;
 	}
 
-	return 0;
+	return ntohl(msg.connect.argc);
 }
 
 int tracecmd_msg_connect_to_server(struct tracecmd_msg_handle *msg_handle)
@@ -652,6 +738,94 @@ error:
 	return ret;
 }
 
+int tracecmd_msg_transfer_fd(struct tracecmd_msg_handle *msg_handle, int fd, int cpus)
+{
+	struct tracecmd_msg msg;
+	int cmd;
+	int ret;
+
+	/* Tell the agent that we are about to send a fd */
+	tracecmd_msg_init(MSG_CONNECT, &msg);
+	msg.connect.cpus = htonl(cpus);
+	ret = tracecmd_msg_send(msg_handle->fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	ret = tracecmd_msg_recv(msg_handle->fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	/* A connect is made by the listener. */
+	cmd = ntohl(msg.hdr.cmd);
+	msg_free(&msg);
+	if (cmd != MSG_ACK) {
+		warning("Expected ACK and received %d\n", cmd);
+		return -EINVAL;
+	}
+
+	return write_fd(msg_handle->fd, fd);
+}
+
+int receive_fd(int fd, int *cpus)
+{
+	struct tracecmd_msg msg;
+	u32 cmd;
+	int ret;
+
+	ret = tracecmd_msg_recv(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	cmd = ntohl(msg.hdr.cmd);
+	if (cmd != MSG_CONNECT)
+		return -EINVAL;
+
+	*cpus = ntohl(msg.connect.cpus);
+
+	tracecmd_msg_init(MSG_ACK, &msg);
+	ret = tracecmd_msg_send(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	return read_fd(fd);
+}
+
+int tracecmd_msg_get_fds(struct tracecmd_msg_handle *msg_handle,
+			 int cpu_count, int *fds)
+{
+	int main_fd;
+	int fd;
+	int cpus;
+	int left;
+	int i;
+
+	main_fd = receive_fd(msg_handle->fd, &cpus);
+	if (main_fd < 0)
+		return main_fd;
+
+	for (i = 0; i < cpu_count; i++)
+		fds[i] = -1;
+
+	for (i = 0; i < cpus; i++) {
+		fd = receive_fd(msg_handle->fd, &left);
+		if (fd < 0)
+			return fd;
+		if (i < cpu_count)
+			fds[i] = fd;
+	}
+	/*
+	 * The fd used to connect to the server is no longer used to transfer
+	 * data. But it is now being used by the server to know when the
+	 * manager exits (which closes all file descriptors).
+	 * The msg_handle is now used to connect to the agent. Just
+	 * replace the current fd with the agent fd and let the old one
+	 * be orphaned. It will be closed on exit.
+	 */
+	msg_handle->fd = main_fd;
+
+	return 0;
+}
+
 enum tracecmd_msg_mngr_type
 tracecmd_msg_read_manager(struct tracecmd_msg_handle *msg_handle)
 {
@@ -660,6 +834,8 @@ tracecmd_msg_read_manager(struct tracecmd_msg_handle *msg_handle)
 	int fd = msg_handle->fd;
 	u32 cmd;
 	int ret;
+
+	memset(&msg, 0, sizeof(msg));
 
 	ret = tracecmd_msg_recv_wait(fd, &msg);
 	if (ret < 0)
@@ -677,7 +853,12 @@ tracecmd_msg_read_manager(struct tracecmd_msg_handle *msg_handle)
 	case MSG_ALIST:
 		type = TRACECMD_MSG_MNG_ALIST;
 		break;
+	case MSG_TRACE:
+		type = TRACECMD_MSG_MNG_TRACE;
+		msg_handle->pid = ntohl(msg.trace.pid);
+		break;
 	}
+	msg_free(&msg);
  out:
 	return type;
 }
@@ -735,6 +916,19 @@ static int send_string(struct tracecmd_msg_handle *msg_handle,
 
 	tracecmd_msg_init(MSG_FINMETA, &msg);
 	return tracecmd_msg_send(fd, &msg);
+}
+
+int tracecmd_msg_agent_parameters(struct tracecmd_msg_handle *msg_handle,
+				  int argc, char **argv)
+{
+	int i;
+
+	for (i = 0; i < argc; i++) {
+		argv[i] = receive_string(msg_handle);
+		if (!argv[i])
+			return -1;
+	}
+	return 0;
 }
 
 int tracecmd_msg_list_domains(struct tracecmd_msg_handle *msg_handle)
@@ -858,20 +1052,44 @@ int tracecmd_msg_get_connect(struct tracecmd_msg_handle *msg_handle,
 	return -ENOMEM;
 }
 
+int tracecmd_msg_send_cpus(struct tracecmd_msg_handle *msg_handle, int cpus)
+{
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+
+	tracecmd_msg_init(MSG_DOMAIN, &msg);
+	msg.domain.cpus = htonl(cpus);
+	return tracecmd_msg_send(fd, &msg);
+}
+
 int tracecmd_msg_send_domain(struct tracecmd_msg_handle *msg_handle,
 			     char *domain, int cpus)
+{
+	int ret;
+
+	ret = tracecmd_msg_send_cpus(msg_handle, cpus);
+	if (ret < 0)
+		return ret;
+
+	return send_string(msg_handle, domain);
+}
+
+int tracecmd_msg_get_domain(struct tracecmd_msg_handle *msg_handle, char **domain)
 {
 	struct tracecmd_msg msg;
 	int fd = msg_handle->fd;
 	int ret;
 
-	tracecmd_msg_init(MSG_DOMAIN, &msg);
-	msg.domain.cpus = htonl(cpus);
+	tracecmd_msg_init(MSG_ACK, &msg);
 	ret = tracecmd_msg_send(fd, &msg);
 	if (ret < 0)
 		return ret;
 
-	return send_string(msg_handle, domain);
+	*domain = receive_string(msg_handle);
+	if (!*domain)
+		return -EINVAL;
+
+	return 0;
 }
 
 int tracecmd_msg_send_finish(struct tracecmd_msg_handle *msg_handle)
@@ -926,6 +1144,61 @@ int tracecmd_msg_connect_guest(struct tracecmd_msg_handle *msg_handle,
 	return 0;
 }
 
+int tracecmd_msg_connect_agent(struct tracecmd_msg_handle *msg_handle,
+			       const char *guest, int pid, int *cpu_count)
+{
+	struct tracecmd_msg msg;
+	int fd = msg_handle->fd;
+	int ret;
+	u32 cmd;
+
+	tracecmd_msg_init(MSG_TRACE, &msg);
+	msg.trace.pid = htonl(pid);
+	ret = tracecmd_msg_send(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	ret = tracecmd_msg_recv_wait(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	cmd = ntohl(msg.hdr.cmd);
+
+	/*
+	 * If the server finds the PID it returns DOMAIN, with
+	 * the number of CPUs the guest has. Otherwise it simply
+	 * returns ACK and expects to receive the domain name.
+	 */
+	if (cmd == MSG_DOMAIN) {
+		*cpu_count = ntohl(msg.domain.cpus);
+		return 0;
+	}
+
+	if (cmd != MSG_ACK) {
+		if (pid)
+			return -ENODEV;
+		else
+			return -EINVAL;
+	}
+
+	ret = send_string(msg_handle, guest);
+	if (ret < 0)
+		return ret;
+
+	ret = tracecmd_msg_recv_wait(fd, &msg);
+	if (ret < 0)
+		return ret;
+
+	cmd = ntohl(msg.hdr.cmd);
+
+	if (cmd != MSG_DOMAIN)
+		return -ENODEV;
+
+	*cpu_count = ntohl(msg.domain.cpus);
+
+	return 0;
+}
+
 static bool process_option(struct tracecmd_msg_handle *msg_handle,
 			   struct tracecmd_msg_opt *opt)
 {
@@ -972,7 +1245,8 @@ tracecmd_msg_handle_alloc(int fd, unsigned long flags)
 
 void tracecmd_msg_handle_close(struct tracecmd_msg_handle *msg_handle)
 {
-	close(msg_handle->fd);
+	if (msg_handle->fd >= 0)
+		close(msg_handle->fd);
 	free(msg_handle);
 }
 

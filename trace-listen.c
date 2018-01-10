@@ -2048,14 +2048,23 @@ static void make_dir(const char *path, mode_t perms)
 static void make_dir_group(const char *path, mode_t perms, const char *gr_name)
 {
 	struct group *group;
+	struct stat st;
+	int ret;
 
-	make_dir(path, perms);
+	ret = stat(path, &st);
+	if (ret < 0)
+		make_dir(path, perms);
 
+	ret = stat(path, &st);
+	if (ret < 0)
+		pdie("failed to stat %s\n", path);
 	group = getgrnam(gr_name);
 	if (!group)
 		pdie("Required group '%s' does not exist.", gr_name);
-	if (chown(path, -1, group->gr_gid) < 0)
-		pdie("chown %s", path);
+	if (group->gr_gid != st.st_gid) {
+		if (chown(path, -1, group->gr_gid) < 0)
+			pdie("chown %s", path);
+	}
 }
 
 static void make_traceif_in_dom_dir(const char *name, int cpu)

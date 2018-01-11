@@ -1,0 +1,283 @@
+"virt-server" is the name of the setup using trace-cmd to be able to trace
+multiple guests as well as the host with a single command, and have that data
+put into a single file that has all the events for the guests and the host
+interlieved via their timestamps.
+
+The process is made up of this commands:
+
+ listen - Create the listening server (Host)
+
+ connect - Connect a guest to the server via FIFOs (Host)
+
+ agent - Create a daemon on the guest to talk with the listener (Guest)
+
+ record - Become the manager to execute tracing on Host and Guest (Host)
+
+The guest requires having a set of FIFO pairs to open a fast channel between the
+Guest and the Host. A "pair" of FIFOs is two files that are single direction.
+There's an ".in" FIFO that is used to send data to the guest, and there is a ".out"
+FIFO that is used to receive data from the guest. In the guest, these pairs appear
+as a character device in /dev/virtio-ports/
+
+The location for these FIFO pairs are in /var/lib/trace-cmd/virt/<domain>/
+
+There's two types of FIFO pairs that are created. One is the "agent-ctl-path" that
+is used to pass control information to and from the Host and Guest, and then there's
+the "trace-path-cpu%d" FIFO pairs that map to each vCPU in the Guest. If there are
+two CPUs then there will be two FIFO pairs.
+
+For example, if a virt machine which the name called Guest has two vCPUs, then
+in the directory /var/lib/trace-cmd/virt/Guest, we would see:
+
+ # ls /var/lib/trace-cmd/virt/Guest
+ agent-ctl-path.in  agent-ctl-path.out  trace-path-cpu0.in  trace-path-cpu0.out
+ trace-path-cpu1.in  trace-path-cpu1.out
+
+The agent-ctl-path.in and agent-ctl-path.out are the FIFO pairs for the control
+information. The trace-path-cpu*.in and trace-path-cpu*.out are the FIFO pairs
+that send the trace data for each CPU. Note, we only care about the .out file
+the guest only uses them to send its data and does not need to receive any
+data.
+
+Fortunately the connect program can create these FIFOs automatically for you.
+
+
+Setup:
+------
+
+The listen server does not need to be root if it is not expected to trace the
+running kernel (which requires root privleges). But it does need to write to
+/var/lib and /var/run. Before doing anything make sure the listen server
+has permissions to write to:
+
+ /var/lib/trace-cmd
+
+and
+
+ /var/run/trace-cmd
+
+The first is easy as you can set it up with the following:
+
+ # mkdir /var/lib/trace-cmd
+ # chown root.qemu /var/lib/trace-cmd
+ # chmod 775 /var/lib/trace-cmd
+
+Then if the listener is part of the qemu group it will have write access
+to the trace-cmd directory under /var/lib
+
+/var/run is a bit more complicated as it is a temporary file system that
+is removed at every reboot. For systems with systemd, you can take
+advantage of the tmpfiles.d configuration.
+
+Create a /etc/tmpfiles.d/tracecmd.conf file with the following contents:
+
+# Type  Path     Mode UID   GID Age Argument
+d /run/trace-cmd 0775 root qemu - -
+
+The above will tell systemd to create a direcotry /run/trace-cmd (which will
+also exist in /var/run/), with root ownership and qemu group. The permissions
+will be 775 to allow the group to be able to write to that directory.
+The next reboot should have this set up properly. If you don't want to
+reboot, simply create the directory /var/run/trace-cmd and change the permissions
+and ownership.
+
+Once these directories are set, you can start the listen server:
+
+ $ trace-cmd listen -D --virt
+
+This will create two sockets in /var/run/trace-cmd for guests and managers.
+The -D will put it into daemon mode.
+
+Next, connect the guest to the server. The first time you do this you will
+need to create the FIFOs before running the guest. The guest does not need
+to be running to make this connection. This command only connects the server
+to the FIFOs. When the guest starts, it needs to connect to the FIFOs to allow
+communication between the guest and the host.
+
+ $ trace-cmd connect -f -c2 -p 660 -g qemu Guest
+
+The "-f -c2 -g qemu" is only need for the first in order to create the FIFOs.
+
+The "-f" means to force the creation, otherwise the command will fail if
+the FIFOs do not exist.
+
+The -c2 is to create two sets of FIFOs for the guest with two vCPUs. If the
+guest has more than two cpus (or just one), then -c should be followed by the
+number of CPUs the guest will have.
+
+The -p 660 is the permission to set the FIFOs and directories that are created.
+Note, for creating directories, since the 'x' (execute) permission bit must be
+set, any 'r' permission will automatically get the 'x' set as well. Thus a
+permission of 0640 would turn into 0750 for the directories.
+
+Finally the '-g qemu' is to denote what group the directories and FIFOs should
+be owned by. By default 'qemu' is used, so this option is not needed in this
+case. But if another group is required, then the -g option is also required.
+
+If this command returns success, than the server would have a connection
+to this guest. To see what guests the server is connect to, use the list
+command.
+
+ $ trace-cmd list -G
+
+Will have the server return a list of guests that are connected, along with
+the PID of the process that was forked to do the connection, and the number
+of CPUs that were registered.
+
+If the FIFOs have already been created, and you need to connect a guest,
+simply do:
+
+ $ trace-cmd connect Guest
+
+The server will look in the /var/lib/trace-cmd/virt for the directory "Guest"
+and figure out the number of CPUs based on the CPU FIFOs that are in that
+directory.
+
+
+Connecting the Guest:
+---------------------
+
+Now you need to connect the guest to the FIFOs before starting the guest.
+
+For libvirt:
+============
+
+Edit the xml file for the guest:
+
+ /etc/libvirt/qemu/Guest.xml
+
+In the "<devices>" section, add:
+
+    <channel type='pipe'>
+      <source path='/var/lib/trace-cmd/virt/Guest/agent-ctl-path'/>
+      <target type='virtio' name='agent-ctl-path'/>
+      <address type='virtio-serial' controller='0' bus='0' port='3'/>
+    </channel>
+
+This connects the Guest to the agent-ctl-path FIFO. Notice the port
+number is '3'. That's because the bus='0' in this file already had
+a "port='1'" and "port='2'" defined. "3" was the next available port.
+
+Now for each CPU fifo, create a pipe for it as well:
+
+    <channel type='pipe'>
+      <source path='/var/lib/trace-cmd/virt/Guest/trace-path-cpu0'/>
+      <target type='virtio' name='trace-path-cpu0'/>
+      <address type='virtio-serial' controller='0' bus='0' port='4'/>
+    </channel>
+    <channel type='pipe'>
+      <source path='/var/lib/trace-cmd/virt/Guest/trace-path-cpu1'/>
+      <target type='virtio' name='trace-path-cpu1'/>
+      <address type='virtio-serial' controller='0' bus='0' port='5'/>
+    </channel>
+
+Notice that the ports start at '4' and increment up for each FIFO that
+is added. Make sure the FIFO names are updated for each pipe as well.
+
+i.e. trace-path-cpu0, trace-path-cpu1, trace-path-cpu2,...
+
+Save this file, and from now on, when the guest starts, it will do the
+proper connections.
+
+
+For qemu:
+=========
+
+Add the following options:
+
+#1  -device virtio-serial-pci,id=virtio-serial0
+
+#2  -chardev pipe,id=charchannel0,path=/var/lib/trace-cmd/virt/Guest/agent-ctl-path
+
+#3  -device virtserialport,bus=virtio-serial0.0,nr=1,chardev=charchannel0,id=channel0,name=agent-ctl-path
+
+#4  -chardev pipe,id=charchannel1,path=/var/lib/trace-cmd/virt/Guest/trace-path-cpu0
+
+#5  -device virtserialport,bus=virtio-serial0.0,nr=2,chardev=charchannel1,id=channel1,name=trace-path-cpu0
+
+#6  -chardev pipe,id=charchannel2,path=/var/lib/trace-cmd/virt/Guest/trace-path-cpu1
+
+#7  -device virtserialport,bus=virtio-serial0.0,nr=3,chardev=charchannel2,id=channel2,name=trace-path-cpu1
+
+The first option creates the serial bus.
+
+The second (#2) option connects the agent-ctl-path FIFO to channel 0.
+
+The third (#3) option connects channel 0 to the virtio-port agent-ctl-path that will
+be visible inside the guest.
+
+The forth (#4) option connects CPU0's FIFO to channel 1.
+
+The fifth (#5) option connects channel 1 to the virtio-port trace-path-cpu0.
+
+The sixth (#6) option connects CPU1's FIFO to channel 2.
+
+The last (#7) option connects channel2 to the virtio-port trace-path-cpu1.
+
+If your guest has more than two CPUs, you need to make sure each FIFO has the
+pair of options to complete the connection to the Guest.
+
+For each -chardev option, you must increment the charchannel# number:
+
+ charchannel0   charchannel1   charchannel2   ...
+
+For each -device virtserialport you must increment 3 numbers; the nr=# number,
+ the charchannel# to match the previous -chardev option, and the id=channel#:
+
+ nr=1,chardev=charchannel0,id=channel0   nr=2,chardev=charchannel1,id=channel1
+ nr=3,chardev=charchannel2,id=channel2   ...
+
+Note, the above options are for a guest called Guest. If your guest has a different
+name, you need to replace "Guest" from above, with the name you use.
+
+
+
+Setting up the guest agent:
+---------------------------
+
+Now that you the pipes that connect the host to the guest, you must still start the
+agent on the guest to listen for connections. This is simply done with:
+
+ # trace-cmd agent -D --virt
+
+The -D tells the agent to go into daemon mod.
+
+The --virt tells the agent to look for the virtio-ports that were created by the
+previous step.
+
+The agent must run as root, as it is required to enable tracing.
+
+
+Tracing the guest from the host:
+--------------------------------
+
+To find what agents have hooked to the listening server, you can run:
+
+ $ trace-cmd list -A
+
+This will give the list of guests that have a registered agent running
+on them. To start recording:
+
+ $ trace-cmd record -A Guest -e sched
+
+The above will ask the Guest agent to start recording all sched events. Hitting
+Ctrl^C will stop the recording, and create the trace.dat file for that guest.
+
+You can trace multiple guests at once, and have all the guests' data saved
+in a single .dat file.
+
+ $ trace-cmd record -A Guest1 -e sched -e irq -A Guest2 -e irq
+
+The above will enable schedule and irq events in Guest1 and only irq events
+in Guest2. The data will be attached in a single .dat file where you will
+be able to see how the guests interact.
+
+You can also add host tracing as well.
+
+ # trace-cmd -e kvm -e irq -A Guest1 -e irq -A Guest2 -e irq
+
+The above enables kvm and irq events on the host, and irq events on guests
+Gust1 and Gust2. Notice that this is run as root. In order to enable tracing
+on the host, root privliges are required.
+
+

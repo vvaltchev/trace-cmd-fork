@@ -1,0 +1,125 @@
+virt-server
+
+1.
+	# On the host
+	sudo ./trace-cmd listen --debug --virt
+
+2.
+	# On the host
+	./trace-cmd connect --debug guest1
+
+3.
+	# On the guest
+	sudo ./trace-cmd agent --debug --virt
+
+4.
+	# On the host
+	./trace-cmd record --debug -A guest1 -e sched
+
+The record in point 4 does:
+
+	main()
+		trace_record()
+			record_trace()
+				start_threads()
+					connect_to_agent(instance) [OK]
+
+						- tracecmd_connect_to_socket(TRACE_MRG_SOCK = /var/run/trace-cmd/manager-ctl-path) [OK]
+
+						- tracecmd_msg_connect_agent()
+
+							- tracecmd_msg_init
+							- tracecmd_msg_send
+							- tracecmd_msg_recv_wait 
+							- send_string(msg_handle, guest)
+							- tracecmd_msg_recv_wait
+
+						- tracecmd_msg_get_fds()
+
+					setup_connection(instance) [FAIL]:
+
+
+QUESTION: why connect_to_agent is called that way but it does not connect to
+the agent at all? It connects just to the manager. Is that correct?
+
+QUESTION: setup_network() has a LOCAL variable named msg_handle.
+In the function there is an if (msg_handle) that seems never impossible
+to be true. Am I missing something?
+
+
+# This seems the wrong function to call: actually, setup_virtio() should work
+# when used from the agent to connect to the listening server.
+# In this case, we're the manager and have to connect to the agent on the
+# other side through the proxed connection.
+
+						- setup_virtio() [FAIL]:
+
+							open(AGENT_CTL_PATH = /dev/virtio-ports/agent-ctl-path, O_RDWR): FAILS
+
+
+
+# Actually I realized that's so confusing because of the:
+	
+	for_all_instances(instance) {
+
+		// vlad
+		instance->agent_cpu_fds = NULL;
+		// end vlad
+
+		/* Start the connection now to find out how many CPUs we need */
+		if (instance->flags & BUFFER_FL_GUEST) {
+			ret = connect_to_agent(instance);
+
+Added in start_threads() in the virt-server branch.
+What I believe should happen is that connect_to_agent() should be called by setup_connection(),
+which is called later by start_threads(), here:
+
+	for_all_instances(instance) {
+		int x, pid;
+
+		if (instance->host ||
+		    (instance->flags & (BUFFER_FL_VIRT | BUFFER_FL_GUEST))) {
+			setup_connection(instance);
+			if (!instance->msg_handle)
+				die("Failed to make connection");
+		}
+
+
+-----------------------
+
+In trace-recorder.c we have:
+
+struct tracecmd_recorder {
+	int		fd;        // OUTPUT. read_data() in trace-recorder.c writes to recorder->fd.
+
+	int		fd1;       // = ??
+	int		fd2;       // = ??
+
+	int		trace_fd;  // the real trace file descriptor?
+                                   // Yes. It is the actual trace (INPUT).
+
+	int		brass[2];  // ??
+	int		pipe_size;
+	int		page_size;
+	int		cpu;
+	int		stop;
+	int		max;
+	int		pages;
+	int		count;     // count of what??
+	unsigned	fd_flags;
+	unsigned	flags;
+};
+
+
+TODO: in create_recorder() [trace-record.c], I have to create the 'record' struct.
+
+Example: tracecmd_create_buffer_recorder_fd2() which works also with fd2 [what is??] set to -1.
+
+But tracecmd_start_recording() is the actual recording function that will use the 'recorder'.
+
+- start_thread() creates:
+	for each buffer instance [= agent]
+		for each vCPU:
+			a recorder
+
+create_recorder(instance, x, type, brass) creates just one recorder.

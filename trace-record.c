@@ -2649,6 +2649,16 @@ create_recorder_instance(struct buffer_instance *instance, const char *file, int
 	return record;
 }
 
+/////
+// TODO: decide the interface of this function and where to put its decl.
+// Likely, in trace-cmd.h.
+
+struct tracecmd_recorder *
+tracecmd_create_agent_recorder(struct buffer_instance *instance,
+                               int cpu, unsigned flags);
+/////
+
+
 /*
  * If extract is set, then this is going to set up the recorder,
  * connections and exit as the tracing is serialized by a single thread.
@@ -2678,6 +2688,12 @@ static int create_recorder(struct buffer_instance *instance, int cpu,
 	}
 
 	if (instance->flags & BUFFER_FL_GUEST) {
+
+		// Vlad
+		recorder =
+			tracecmd_create_agent_recorder(instance,
+			                               cpu,
+						       recorder_flags);
 
 	} else if (client_ports) {
 		char *path;
@@ -2952,6 +2968,16 @@ static struct tracecmd_msg_handle *setup_virtio(void)
 	return communicate_with_listener_virt(fd);
 }
 
+// static struct tracecmd_msg_handle *setup_virtio_client(struct buffer_instance *instance)
+// {
+// 	// Implement.
+
+// 	instance->msg_handle->cpu_count = instance->cpu_count;
+// 	instance->msg_handle->version = V2_PROTOCOL;
+
+// 	return instance->msg_handle;
+// }
+
 static void setup_connection(struct buffer_instance *instance)
 {
 	struct tracecmd_output *network_handle;
@@ -2959,8 +2985,17 @@ static void setup_connection(struct buffer_instance *instance)
 
 	if (instance->host)
 		msg_handle = setup_network(instance);
-	else
+	else if (!instance->agent_cpu_fds)
 		msg_handle = setup_virtio();
+	else {
+		// Vlad
+		// Probably that's enough here.
+
+		instance->msg_handle->version = V2_PROTOCOL;
+		instance->msg_handle->cpu_count = instance->cpu_count;
+		
+		return;
+	}
 
 	/* Now create the handle through this socket */
 	if (msg_handle->version == V2_PROTOCOL) {
@@ -3026,8 +3061,14 @@ static int connect_to_agent(struct buffer_instance *instance)
 	/* the msg_handle now points to the guest fd */
 	instance->msg_handle = msg_handle;
 
+	// vlad
+	instance->agent_cpu_fds = agent_cpu_fds;
+	// end vlad
 	return ret;
 }
+
+// Vlad
+void tmp_func(int fd);
 
 static void finish_network(struct buffer_instance *instance)
 {
@@ -3048,12 +3089,22 @@ static void start_threads(enum trace_type type, int global)
 	int i = 0;
 	int ret;
 
+	
 	for_all_instances(instance) {
+
+		// vlad
+		instance->agent_cpu_fds = NULL;
+		// end vlad
+
 		/* Start the connection now to find out how many CPUs we need */
 		if (instance->flags & BUFFER_FL_GUEST) {
 			ret = connect_to_agent(instance);
 			if (ret < 0)
 				die("Failed to connect to agent");
+
+			// VLAD
+			// 'fd' is the ctl channel of the agent, through the proxy.
+			//tmp_func(instance->msg_handle->fd);
 		}
 		total_cpu_count += instance->cpu_count;
 	}

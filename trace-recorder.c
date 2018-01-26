@@ -115,6 +115,40 @@ void tracecmd_free_recorder(struct tracecmd_recorder *recorder)
 	free(recorder);
 }
 
+// Vlad
+struct tracecmd_recorder *
+tracecmd_create_agent_recorder(struct buffer_instance *instance,
+                               int cpu, unsigned flags)
+{
+	struct tracecmd_recorder *recorder;
+
+	// [Vlad]
+	// TODO: implement!
+
+	// In practice, here we have to create a 'recorder'.
+	// It will be used by tracecmd_start_recording().
+	
+	recorder = malloc(sizeof(*recorder));
+
+	recorder->cpu = cpu;
+	recorder->flags = flags;
+	recorder->fd_flags = 0;
+
+	recorder->trace_fd = -1;
+	recorder->brass[0] = -1;
+	recorder->brass[1] = -1;
+
+	recorder->page_size = getpagesize();
+	recorder->max = 0;
+
+	recorder->count = 0;
+	recorder->pages = 0;
+
+
+	// TODO: finish the impl!
+	return recorder;
+}
+
 struct tracecmd_recorder *
 tracecmd_create_buffer_recorder_fd2(int fd, int fd2, int cpu, unsigned flags,
 				    const char *buffer, int maxkb)

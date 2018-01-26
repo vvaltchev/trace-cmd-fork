@@ -228,6 +228,9 @@ struct buffer_instance {
 
 	int			argc;
 	char			**argv;
+
+	// vlad
+	int *agent_cpu_fds;
 };
 
 extern struct buffer_instance top_instance;

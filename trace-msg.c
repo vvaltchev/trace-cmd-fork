@@ -670,6 +670,20 @@ int tracecmd_msg_send_init_data(struct tracecmd_msg_handle *msg_handle,
 	return 0;
 }
 
+// Vlad
+
+void tmp_func(int fd)
+{
+	struct tracecmd_msg msg;
+	tracecmd_msg_init(MSG_CINIT, &msg);
+
+	printf("*** [tmp_func] fd: %i\n", fd);
+	int ret = tracecmd_msg_send(fd, &msg);
+
+	printf("send ret: %i\n", ret);
+
+}
+
 int tracecmd_msg_agent_connect(struct tracecmd_msg_handle *msg_handle, int cpu_count)
 {
 	struct tracecmd_msg msg;

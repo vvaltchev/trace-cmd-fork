@@ -954,8 +954,12 @@ static char *get_guest_domain_from_pid_libvirt(int pid)
 	}
 
 	for (dirent = readdir(dir); dirent != NULL; dirent = readdir(dir)) {
-		snprintf(file_name, NAME_MAX, LIBVIRT_DOMAIN_PATH"%s",
-			 dirent->d_name);
+
+		strcpy(file_name, LIBVIRT_DOMAIN_PATH);
+		strncat(file_name,
+			dirent->d_name,
+			sizeof(file_name) - strlen(LIBVIRT_DOMAIN_PATH) - 1);
+
 		file_name_ret = strstr(file_name, ".pid");
 		if (file_name_ret) {
 			fd = open(file_name, O_RDONLY);
@@ -1468,7 +1472,7 @@ static int create_socket(struct sockaddr_un *un_server,
 		return sfd;
 
 	un_server->sun_family = AF_UNIX;
-	snprintf(un_server->sun_path, strlen(file)+1, file);
+	strncpy(un_server->sun_path, file, sizeof(un_server->sun_path) - 1);
 
 	return sfd;
 }
@@ -2301,7 +2305,7 @@ static int set_up_socket(const char *file)
 		pdie("socket");
 
 	un_server.sun_family = AF_UNIX;
-	snprintf(un_server.sun_path, PATH_MAX, file);
+	strncpy(un_server.sun_path, file, sizeof(un_server.sun_path) - 1);
 
 	if (bind(sfd, (struct sockaddr *)&un_server, slen) < 0)
 		pdie("bind");
